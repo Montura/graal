@@ -39,9 +39,11 @@ import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.c.NonmovableArrays;
 import com.oracle.svm.core.c.NonmovableObjectArray;
 import com.oracle.svm.core.code.FrameInfoDecoder.ValueInfoAllocator;
+import com.oracle.svm.core.deopt.SubstrateInstalledCode;
 import com.oracle.svm.core.heap.Heap;
 import com.oracle.svm.core.log.Log;
 import com.oracle.svm.core.thread.VMOperation;
+import com.oracle.svm.core.util.VMError;
 
 /**
  * Provides functionality to query information about a unit of compiled code from a {@link CodeInfo}
@@ -142,6 +144,27 @@ public final class CodeInfoAccess {
         return cast(info).getState();
     }
 
+    public static String stateToString(int codeInfoState) {
+        switch (codeInfoState) {
+            case CodeInfo.STATE_CREATED:
+                return "created";
+            case CodeInfo.STATE_CODE_CONSTANTS_LIVE:
+                return "code constants live";
+            case CodeInfo.STATE_NON_ENTRANT:
+                return "non-entrant";
+            case CodeInfo.STATE_READY_FOR_INVALIDATION:
+                return "ready for invalidation";
+            case CodeInfo.STATE_PARTIALLY_FREED:
+                return "partially freed";
+            case CodeInfo.STATE_UNREACHABLE:
+                return "unreachable";
+            case CodeInfo.STATE_FREED:
+                return "invalid (freed)";
+            default:
+                return "invalid state";
+        }
+    }
+
     @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static boolean isAlive(CodeInfo info) {
         return isAliveState(cast(info).getState());
@@ -195,7 +218,6 @@ public final class CodeInfoAccess {
                             .add(NonmovableArrays.byteSizeOf(impl.getFrameInfoObjectConstants()))
                             .add(NonmovableArrays.byteSizeOf(impl.getFrameInfoSourceClasses()))
                             .add(NonmovableArrays.byteSizeOf(impl.getFrameInfoSourceMethodNames()))
-                            .add(NonmovableArrays.byteSizeOf(impl.getFrameInfoNames()))
                             .add(NonmovableArrays.byteSizeOf(impl.getDeoptimizationStartOffsets()))
                             .add(NonmovableArrays.byteSizeOf(impl.getDeoptimizationEncodings()))
                             .add(NonmovableArrays.byteSizeOf(impl.getDeoptimizationObjectConstants()))
@@ -220,21 +242,43 @@ public final class CodeInfoAccess {
         return (CodePointer) ((UnsignedWord) cast(info).getCodeStart()).add(WordFactory.unsigned(relativeIP));
     }
 
-    public static long initFrameInfoReader(CodeInfo info, CodePointer ip, ReusableTypeReader frameInfoReader) {
-        long entryOffset = CodeInfoDecoder.lookupCodeInfoEntryOffset(info, relativeIP(info, ip));
-        if (entryOffset >= 0) {
-            if (!CodeInfoDecoder.initFrameInfoReader(info, entryOffset, frameInfoReader)) {
-                return -1;
-            }
+    public static class FrameInfoState {
+        public static final int NO_SUCCESSOR_INDEX_MARKER = -1;
+
+        public long entryOffset;
+        public boolean isFirstFrame;
+        public boolean isDone;
+        public int firstValue;
+        public int successorIndex;
+
+        public FrameInfoState() {
+            reset();
         }
-        return entryOffset;
+
+        public void reset() {
+            entryOffset = -1;
+            isFirstFrame = true;
+            isDone = false;
+            firstValue = -1;
+            successorIndex = NO_SUCCESSOR_INDEX_MARKER;
+        }
     }
 
-    public static FrameInfoQueryResult nextFrameInfo(CodeInfo info, long entryOffset, ReusableTypeReader frameInfoReader,
-                    FrameInfoDecoder.FrameInfoQueryResultAllocator resultAllocator, ValueInfoAllocator valueInfoAllocator, boolean fetchFirstFrame) {
-        int entryFlags = CodeInfoDecoder.loadEntryFlags(info, entryOffset);
+    public static void initFrameInfoReader(CodeInfo info, CodePointer ip, ReusableTypeReader frameInfoReader, FrameInfoState state) {
+        long entryOffset = CodeInfoDecoder.lookupCodeInfoEntryOffset(info, relativeIP(info, ip));
+        state.entryOffset = entryOffset;
+        if (entryOffset >= 0) {
+            if (!CodeInfoDecoder.initFrameInfoReader(info, entryOffset, frameInfoReader)) {
+                state.entryOffset = -1;
+            }
+        }
+    }
+
+    public static FrameInfoQueryResult nextFrameInfo(CodeInfo info, ReusableTypeReader frameInfoReader,
+                    FrameInfoDecoder.FrameInfoQueryResultAllocator resultAllocator, ValueInfoAllocator valueInfoAllocator, FrameInfoState state) {
+        int entryFlags = CodeInfoDecoder.loadEntryFlags(info, state.entryOffset);
         boolean isDeoptEntry = CodeInfoDecoder.extractFI(entryFlags) == CodeInfoDecoder.FI_DEOPT_ENTRY_INDEX_S4;
-        return FrameInfoDecoder.decodeFrameInfo(isDeoptEntry, frameInfoReader, info, resultAllocator, valueInfoAllocator, fetchFirstFrame);
+        return FrameInfoDecoder.decodeFrameInfo(isDeoptEntry, frameInfoReader, info, resultAllocator, valueInfoAllocator, state);
     }
 
     @SuppressWarnings("unchecked")
@@ -257,6 +301,7 @@ public final class CodeInfoAccess {
         return CodeInfoQueryResult.getTotalFrameSize(codeInfoQueryResult.getEncodedFrameSize());
     }
 
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     public static NonmovableArray<Byte> getStackReferenceMapEncoding(CodeInfo info) {
         return cast(info).getStackReferenceMapEncoding();
     }
@@ -274,18 +319,9 @@ public final class CodeInfoAccess {
     }
 
     @Uninterruptible(reason = "Nonmovable object arrays are not visible to GC until installed.")
-    public static void setFrameInfo(CodeInfo info, NonmovableArray<Byte> encodings, NonmovableObjectArray<Object> objectConstants,
-                    NonmovableObjectArray<Class<?>> sourceClasses, NonmovableObjectArray<String> sourceMethodNames, NonmovableObjectArray<String> names) {
+    public static void setFrameInfo(CodeInfo info, NonmovableArray<Byte> encodings) {
         CodeInfoImpl impl = cast(info);
         impl.setFrameInfoEncodings(encodings);
-        impl.setFrameInfoObjectConstants(objectConstants);
-        impl.setFrameInfoSourceClasses(sourceClasses);
-        impl.setFrameInfoSourceMethodNames(sourceMethodNames);
-        impl.setFrameInfoNames(names);
-        if (!SubstrateUtil.HOSTED) {
-            // notify the GC about the frame metadata that is now live
-            Heap.getHeap().getRuntimeCodeInfoGCSupport().registerFrameMetadata(impl);
-        }
     }
 
     public static void setCodeInfo(CodeInfo info, NonmovableArray<Byte> index, NonmovableArray<Byte> encodings, NonmovableArray<Byte> referenceMapEncoding) {
@@ -293,6 +329,19 @@ public final class CodeInfoAccess {
         impl.setCodeInfoIndex(index);
         impl.setCodeInfoEncodings(encodings);
         impl.setStackReferenceMapEncoding(referenceMapEncoding);
+    }
+
+    @Uninterruptible(reason = "Nonmovable object arrays are not visible to GC until installed.")
+    public static void setEncodings(CodeInfo info, NonmovableObjectArray<Object> objectConstants,
+                    NonmovableObjectArray<Class<?>> sourceClasses, NonmovableObjectArray<String> sourceMethodNames) {
+        CodeInfoImpl impl = cast(info);
+        impl.setFrameInfoObjectConstants(objectConstants);
+        impl.setFrameInfoSourceClasses(sourceClasses);
+        impl.setFrameInfoSourceMethodNames(sourceMethodNames);
+        if (!SubstrateUtil.HOSTED) {
+            // notify the GC about the frame metadata that is now live
+            Heap.getHeap().getRuntimeCodeInfoGCSupport().registerFrameMetadata(impl);
+        }
     }
 
     public static Log log(CodeInfo info, Log log) {
@@ -346,13 +395,65 @@ public final class CodeInfoAccess {
         return cast(info).getFrameInfoSourceMethodNames();
     }
 
-    public static NonmovableObjectArray<String> getFrameInfoNames(CodeInfo info) {
-        return cast(info).getFrameInfoNames();
-    }
-
     @Uninterruptible(reason = "Called from uninterruptible code", mayBeInlined = true)
     private static CodeInfoImpl cast(UntetheredCodeInfo info) {
         assert isValid(info);
         return (CodeInfoImpl) info;
+    }
+
+    public static void printCodeInfo(Log log, CodeInfo info, boolean allowJavaHeapAccess) {
+        String name = null;
+        HasInstalledCode hasInstalledCode = HasInstalledCode.Unknown;
+        SubstrateInstalledCode installedCode = null;
+        if (allowJavaHeapAccess) {
+            name = CodeInfoAccess.getName(info);
+            installedCode = RuntimeCodeInfoAccess.getInstalledCode(info);
+            hasInstalledCode = (installedCode == null) ? HasInstalledCode.No : HasInstalledCode.Yes;
+        }
+
+        printCodeInfo(log, info, CodeInfoAccess.getState(info), name, CodeInfoAccess.getCodeStart(info), CodeInfoAccess.getCodeEnd(info), hasInstalledCode, installedCode);
+    }
+
+    public static void printCodeInfo(Log log, UntetheredCodeInfo info, int state, String name, CodePointer codeStart, CodePointer codeEnd, HasInstalledCode hasInstalledCode,
+                    SubstrateInstalledCode installedCode) {
+        long installedCodeAddress = 0;
+        long installedCodeEntryPoint = 0;
+        if (installedCode != null) {
+            assert hasInstalledCode == HasInstalledCode.Yes;
+            installedCodeAddress = installedCode.getAddress();
+            installedCodeEntryPoint = installedCode.getEntryPoint();
+        }
+
+        printCodeInfo(log, info, state, name, codeStart, codeEnd, hasInstalledCode, installedCodeAddress, installedCodeEntryPoint);
+    }
+
+    public static void printCodeInfo(Log log, UntetheredCodeInfo codeInfo, int state, String name, CodePointer codeStart, CodePointer codeEnd, HasInstalledCode hasInstalledCode,
+                    long installedCodeAddress, long installedCodeEntryPoint) {
+        log.string("CodeInfo (").zhex(codeInfo).string(" - ").zhex(((UnsignedWord) codeInfo).add(RuntimeCodeInfoAccess.getSizeOfCodeInfo()).subtract(1)).string("), ")
+                        .string(CodeInfoAccess.stateToString(state));
+        if (name != null) {
+            log.string(" - ").string(name);
+        }
+        log.string(", ip: (").zhex(codeStart).string(" - ").zhex(codeEnd).string(")");
+
+        switch (hasInstalledCode) {
+            case Yes:
+                log.string(", installedCode: (address: ").zhex(installedCodeAddress).string(", entryPoint: ").zhex(installedCodeEntryPoint).string(")");
+                break;
+            case No:
+                log.string(", installedCode: null.");
+                break;
+            case Unknown:
+                // nothing to do.
+                break;
+            default:
+                throw VMError.shouldNotReachHere("Unexpected value for HasInstalledCode");
+        }
+    }
+
+    public enum HasInstalledCode {
+        Yes,
+        No,
+        Unknown
     }
 }

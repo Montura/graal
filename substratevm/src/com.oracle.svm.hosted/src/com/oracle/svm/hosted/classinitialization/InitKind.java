@@ -24,11 +24,15 @@
  */
 package com.oracle.svm.hosted.classinitialization;
 
+import static com.oracle.svm.hosted.NativeImageOptions.DiagnosticsMode;
+
 import java.util.Arrays;
 import java.util.Optional;
 import java.util.function.Consumer;
 
 import org.graalvm.collections.Pair;
+
+import com.oracle.svm.core.option.OptionOrigin;
 
 /**
  * The initialization kind for a class. The order of the enum values matters, {@link #max} depends
@@ -60,16 +64,27 @@ public enum InitKind {
         return SEPARATOR + name().toLowerCase();
     }
 
-    Consumer<String> stringConsumer(ClassInitializationSupport support, String origin) {
-        String prefix = "from ";
-        String reason = origin == null ? prefix + "the command line" : prefix + origin;
+    Consumer<String> stringConsumer(ClassInitializationSupport support, OptionOrigin origin) {
         if (this == RUN_TIME) {
-            return name -> support.initializeAtRunTime(name, reason);
+            return name -> support.initializeAtRunTime(name, reason(origin, name));
         } else if (this == RERUN) {
-            return name -> support.rerunInitialization(name, reason);
+            return name -> support.rerunInitialization(name, reason(origin, name));
         } else {
-            return name -> support.initializeAtBuildTime(name, reason);
+            return name -> {
+                if (name.equals("") && !DiagnosticsMode.getValue()) {
+                    System.err.println(
+                                    "--initialize-at-build-time without arguments has been deprecated when not using --diagnostics-mode. With GraalVM 22.0.0" +
+                                                    " --initialize-at-build-time will only work with --diagnostics-mode for debugging purposes.\n" +
+                                                    "The reason for deprecation is that --initalize-at-build-time does not compose, i.e., a single library can make assumptions that the whole classpath can be safely initialized at build time;" +
+                                                    " that assumption is often incorrect.");
+                }
+                support.initializeAtBuildTime(name, reason(origin, name));
+            };
         }
+    }
+
+    private static String reason(OptionOrigin origin, String name) {
+        return "from " + origin + " with '" + name + "'";
     }
 
     static Pair<String, InitKind> strip(String input) {

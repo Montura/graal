@@ -29,9 +29,10 @@ import static com.oracle.truffle.espresso.classfile.Constants.ACC_CALLER_SENSITI
 import static com.oracle.truffle.espresso.classfile.Constants.ACC_ENUM;
 import static com.oracle.truffle.espresso.classfile.Constants.ACC_FINAL;
 import static com.oracle.truffle.espresso.classfile.Constants.ACC_FINALIZER;
+import static com.oracle.truffle.espresso.classfile.Constants.ACC_FORCE_INLINE;
+import static com.oracle.truffle.espresso.classfile.Constants.ACC_HIDDEN;
 import static com.oracle.truffle.espresso.classfile.Constants.ACC_INTERFACE;
 import static com.oracle.truffle.espresso.classfile.Constants.ACC_LAMBDA_FORM_COMPILED;
-import static com.oracle.truffle.espresso.classfile.Constants.ACC_LAMBDA_FORM_HIDDEN;
 import static com.oracle.truffle.espresso.classfile.Constants.ACC_MODULE;
 import static com.oracle.truffle.espresso.classfile.Constants.ACC_NATIVE;
 import static com.oracle.truffle.espresso.classfile.Constants.ACC_PRIVATE;
@@ -44,25 +45,18 @@ import static com.oracle.truffle.espresso.classfile.Constants.ACC_SYNCHRONIZED;
 import static com.oracle.truffle.espresso.classfile.Constants.ACC_SYNTHETIC;
 import static com.oracle.truffle.espresso.classfile.Constants.ACC_VARARGS;
 import static com.oracle.truffle.espresso.classfile.Constants.ACC_VOLATILE;
-import static com.oracle.truffle.espresso.classfile.Constants.APPEND_FRAME_BOUND;
-import static com.oracle.truffle.espresso.classfile.Constants.CHOP_BOUND;
-import static com.oracle.truffle.espresso.classfile.Constants.FULL_FRAME;
-import static com.oracle.truffle.espresso.classfile.Constants.ITEM_InitObject;
-import static com.oracle.truffle.espresso.classfile.Constants.ITEM_NewObject;
-import static com.oracle.truffle.espresso.classfile.Constants.ITEM_Object;
 import static com.oracle.truffle.espresso.classfile.Constants.JVM_RECOGNIZED_CLASS_MODIFIERS;
 import static com.oracle.truffle.espresso.classfile.Constants.JVM_RECOGNIZED_METHOD_MODIFIERS;
-import static com.oracle.truffle.espresso.classfile.Constants.SAME_FRAME_BOUND;
-import static com.oracle.truffle.espresso.classfile.Constants.SAME_FRAME_EXTENDED;
-import static com.oracle.truffle.espresso.classfile.Constants.SAME_LOCALS_1_STACK_ITEM_BOUND;
-import static com.oracle.truffle.espresso.classfile.Constants.SAME_LOCALS_1_STACK_ITEM_EXTENDED;
 
 import java.io.IOException;
 import java.lang.reflect.Modifier;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
 
-import com.oracle.truffle.espresso.EspressoLanguage;
+import org.graalvm.collections.EconomicMap;
+
 import com.oracle.truffle.espresso.classfile.ConstantPool.Tag;
 import com.oracle.truffle.espresso.classfile.attributes.BootstrapMethodsAttribute;
 import com.oracle.truffle.espresso.classfile.attributes.CodeAttribute;
@@ -76,6 +70,8 @@ import com.oracle.truffle.espresso.classfile.attributes.LocalVariableTable;
 import com.oracle.truffle.espresso.classfile.attributes.MethodParametersAttribute;
 import com.oracle.truffle.espresso.classfile.attributes.NestHostAttribute;
 import com.oracle.truffle.espresso.classfile.attributes.NestMembersAttribute;
+import com.oracle.truffle.espresso.classfile.attributes.PermittedSubclassesAttribute;
+import com.oracle.truffle.espresso.classfile.attributes.RecordAttribute;
 import com.oracle.truffle.espresso.classfile.attributes.SignatureAttribute;
 import com.oracle.truffle.espresso.classfile.attributes.SourceDebugExtensionAttribute;
 import com.oracle.truffle.espresso.classfile.attributes.SourceFileAttribute;
@@ -88,7 +84,7 @@ import com.oracle.truffle.espresso.descriptors.Symbol.Name;
 import com.oracle.truffle.espresso.descriptors.Symbol.Signature;
 import com.oracle.truffle.espresso.descriptors.Symbol.Type;
 import com.oracle.truffle.espresso.descriptors.Types;
-import com.oracle.truffle.espresso.impl.Klass;
+import com.oracle.truffle.espresso.impl.ClassRegistry;
 import com.oracle.truffle.espresso.impl.ParserField;
 import com.oracle.truffle.espresso.impl.ParserKlass;
 import com.oracle.truffle.espresso.impl.ParserMethod;
@@ -103,7 +99,6 @@ import com.oracle.truffle.espresso.runtime.ClasspathFile;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.EspressoException;
 import com.oracle.truffle.espresso.runtime.StaticObject;
-import com.oracle.truffle.espresso.substitutions.Host;
 
 @SuppressWarnings("try")
 public final class ClassfileParser {
@@ -158,16 +153,17 @@ public final class ClassfileParser {
     public static final char JAVA_MIN_SUPPORTED_VERSION = JAVA_1_1_VERSION;
     public static final char JAVA_MAX_SUPPORTED_VERSION = JAVA_11_VERSION;
     public static final char JAVA_MAX_SUPPORTED_MINOR_VERSION = 0;
+    public static final char JAVA_PREVIEW_MINOR_VERSION = 65535;
 
     private final ClasspathFile classfile;
 
-    private final String requestedClassType;
+    private final Symbol<Type> requestedClassType;
 
     private final EspressoContext context;
 
     private final ClassfileStream stream;
 
-    private final StaticObject[] constantPoolPatches;
+    private final ClassRegistry.ClassDefinitionInfo classDefinitionInfo;
 
     private Symbol<Type> classType;
 
@@ -178,30 +174,22 @@ public final class ClassfileParser {
     private int maxBootstrapMethodAttrIndex = -1;
     private Tag badConstantSeen;
 
+    StaticObject loader;
+
     private ConstantPool pool;
 
-    @SuppressWarnings("unused")
-    public Klass getHostClass() {
-        return hostClass;
-    }
-
-    /**
-     * The host class for an anonymous class.
-     */
-    private final Klass hostClass;
-
-    private ClassfileParser(ClassfileStream stream, String requestedClassType, Klass hostClass, EspressoContext context, StaticObject[] constantPoolPatches) {
+    private ClassfileParser(ClassfileStream stream, StaticObject loader, Symbol<Type> requestedClassType, EspressoContext context, ClassRegistry.ClassDefinitionInfo info) {
         this.requestedClassType = requestedClassType;
-        this.hostClass = hostClass;
         this.context = context;
         this.classfile = null;
         this.stream = Objects.requireNonNull(stream);
-        this.constantPoolPatches = constantPoolPatches;
+        this.loader = loader;
+        this.classDefinitionInfo = info;
     }
 
     // Note: only used for reading the class name from class bytes
     private ClassfileParser(ClassfileStream stream, EspressoContext context) {
-        this(stream, "", null, context, null);
+        this(stream, null, null, context, ClassRegistry.ClassDefinitionInfo.EMPTY);
     }
 
     void handleBadConstant(Tag tag, ClassfileStream s) {
@@ -223,22 +211,22 @@ public final class ClassfileParser {
 
     void checkInvokeDynamicSupport(Tag tag) {
         if (majorVersion < INVOKEDYNAMIC_MAJOR_VERSION) {
-            stream.classFormatError("Class file version does not support constant tag %d", tag.getValue());
+            throw stream.classFormatError("Class file version does not support constant tag %d", tag.getValue());
         }
     }
 
     void checkDynamicConstantSupport(Tag tag) {
         if (majorVersion < DYNAMICCONSTANT_MAJOR_VERSION) {
-            stream.classFormatError("Class file version does not support constant tag %d", tag.getValue());
+            throw stream.classFormatError("Class file version does not support constant tag %d", tag.getValue());
         }
     }
 
-    public static ParserKlass parse(ClassfileStream stream, String requestedClassName, Klass hostClass, EspressoContext context) {
-        return parse(stream, requestedClassName, hostClass, context, null);
+    public static ParserKlass parse(ClassfileStream stream, StaticObject loader, Symbol<Type> requestedClassName, EspressoContext context) {
+        return parse(stream, loader, requestedClassName, context, ClassRegistry.ClassDefinitionInfo.EMPTY);
     }
 
-    public static ParserKlass parse(ClassfileStream stream, String requestedClassName, Klass hostClass, EspressoContext context, @Host(Object[].class) StaticObject[] constantPoolPatches) {
-        return new ClassfileParser(stream, requestedClassName, hostClass, context, constantPoolPatches).parseClass();
+    public static ParserKlass parse(ClassfileStream stream, StaticObject loader, Symbol<Type> requestedClassType, EspressoContext context, ClassRegistry.ClassDefinitionInfo info) {
+        return new ClassfileParser(stream, loader, requestedClassType, context, info).parseClass();
     }
 
     private ParserKlass parseClass() {
@@ -261,15 +249,17 @@ public final class ClassfileParser {
 
     /**
      * Verifies that the class file version is supported.
-     * 
+     *
      * @param major the major version number
      * @param minor the minor version number
      */
     private void verifyVersion(int major, int minor) {
         if (context.getJavaVersion().java8OrEarlier()) {
-            versionCheck8(context.getJavaVersion().classFileVersion(), major, minor);
+            versionCheck8OrEarlier(context.getJavaVersion().classFileVersion(), major, minor);
+        } else if (context.getJavaVersion().java11OrEarlier()) {
+            versionCheck11OrEarlier(context.getJavaVersion().classFileVersion(), major, minor);
         } else {
-            versionCheck11(context.getJavaVersion().classFileVersion(), major, minor);
+            versionCheck12OrLater(context.getJavaVersion().classFileVersion(), major, minor);
         }
     }
 
@@ -279,12 +269,14 @@ public final class ClassfileParser {
      * <li>Major_version >= 45 and major_version <= current_major_version, any minor version.
      * <li>Major_version = current_major_version and minor_version <= MAX_SUPPORTED_MINOR (= 0).
      */
-    private static void versionCheck8(int maxMajor, int major, int minor) {
-        if (major < JAVA_MIN_SUPPORTED_VERSION ||
-                        major > maxMajor ||
-                        (major == maxMajor && minor > JAVA_MAX_SUPPORTED_MINOR_VERSION)) {
-            throw unsupportedClassVersionError("Unsupported major.minor version " + major + "." + minor);
+    private static void versionCheck8OrEarlier(int maxMajor, int major, int minor) {
+        if (major == maxMajor && minor <= JAVA_MAX_SUPPORTED_MINOR_VERSION) {
+            return;
         }
+        if (major >= JAVA_MIN_SUPPORTED_VERSION && major < maxMajor) {
+            return;
+        }
+        throw unsupportedClassVersionError("Unsupported major.minor version " + major + "." + minor);
     }
 
     /**
@@ -295,17 +287,44 @@ public final class ClassfileParser {
      * <li>Major_version = current_major_version and minor_version = 65535 and --enable-preview is
      * present.
      */
-    private static void versionCheck11(int maxMajor, int major, int minor) {
-        if (major < JAVA_MIN_SUPPORTED_VERSION ||
-                        major > maxMajor ||
-                        major != JAVA_1_1_VERSION && minor != 0 ||
-                        (major == maxMajor) && (minor > JAVA_MAX_SUPPORTED_MINOR_VERSION)) {
-            throw unsupportedClassVersionError("Unsupported major.minor version " + major + "." + minor);
+    private static void versionCheck11OrEarlier(int maxMajor, int major, int minor) {
+        if (major == maxMajor && (minor <= JAVA_MAX_SUPPORTED_MINOR_VERSION || minor == JAVA_PREVIEW_MINOR_VERSION)) {
+            return;
         }
+        if (major < maxMajor && major > JAVA_MIN_SUPPORTED_VERSION && minor == 0) {
+            return;
+        }
+        if (major == JAVA_MIN_SUPPORTED_VERSION) {
+            return;
+        }
+        throw unsupportedClassVersionError("Unsupported major.minor version " + major + "." + minor);
+    }
+
+    /**
+     * Hotspot comment (17): A legal major_version.minor_version must be one of the following:
+     *
+     * <li>Major_version >= 45 and major_version < 56, any minor_version.
+     * <li>Major_version >= 56 and major_version <= JVM_CLASSFILE_MAJOR_VERSION and minor_version =
+     * 0.
+     * <li>Major_version = JVM_CLASSFILE_MAJOR_VERSION and minor_version = 65535 and
+     * --enable-preview is present.
+     *
+     */
+    private static void versionCheck12OrLater(int maxMajor, int major, int minor) {
+        if (major >= JAVA_12_VERSION && major <= maxMajor && minor == 0) {
+            return;
+        }
+        if (major >= JAVA_MIN_SUPPORTED_VERSION && major < JAVA_12_VERSION) {
+            return;
+        }
+        if (major == maxMajor && minor == JAVA_PREVIEW_MINOR_VERSION) {
+            return;
+        }
+        throw unsupportedClassVersionError("Unsupported major.minor version " + major + "." + minor);
     }
 
     private static EspressoException unsupportedClassVersionError(String message) {
-        Meta meta = EspressoLanguage.getCurrentContext().getMeta();
+        Meta meta = EspressoContext.get(null).getMeta();
         throw meta.throwExceptionWithMessage(meta.java_lang_UnsupportedClassVersionError, message);
     }
 
@@ -340,11 +359,7 @@ public final class ClassfileParser {
         verifyVersion(majorVersion, minorVersion);
 
         try (DebugCloseable closeable = CONSTANT_POOL.scope(context.getTimers())) {
-            if (constantPoolPatches == null) {
-                this.pool = ConstantPool.parse(context.getLanguage(), stream, this, majorVersion, minorVersion);
-            } else {
-                this.pool = ConstantPool.parse(context.getLanguage(), stream, this, constantPoolPatches, context, majorVersion, minorVersion);
-            }
+            this.pool = ConstantPool.parse(context.getLanguage(), stream, this, classDefinitionInfo.patches, context, majorVersion, minorVersion);
         }
 
         // JVM_ACC_MODULE is defined in JDK-9 and later.
@@ -391,7 +406,7 @@ public final class ClassfileParser {
         classType = thisKlassType;
 
         // Checks if name in class file matches requested name
-        if (requestedClassType != null && !requestedClassType.equals(classType.toString())) {
+        if (requestedClassType != null && !classDefinitionInfo.isHidden() && !requestedClassType.equals(classType)) {
             throw ConstantPool.noClassDefFoundError(classType + " (wrong name: " + requestedClassType + ")");
         }
 
@@ -425,7 +440,16 @@ public final class ClassfileParser {
         // Ensure there are no trailing bytes
         stream.checkEndOfFile();
 
-        return new ParserKlass(pool, classFlags, thisKlassName, thisKlassType, superKlass, superInterfaces, methods, fields, attributes, thisKlassIndex);
+        if (classDefinitionInfo.isHidden()) {
+            assert requestedClassType != null;
+            int futureKlassID = context.getNewKlassId();
+            classDefinitionInfo.initKlassID(futureKlassID);
+            thisKlassName = context.getNames().getOrCreate(Types.hiddenClassName(requestedClassType, futureKlassID));
+            thisKlassType = context.getTypes().fromName(thisKlassName);
+            pool = pool.patchForHiddenClass(thisKlassIndex, thisKlassName);
+        }
+
+        return new ParserKlass(pool, classDefinitionInfo.patchFlags(classFlags), thisKlassName, thisKlassType, superKlass, superInterfaces, methods, fields, attributes, thisKlassIndex);
     }
 
     public static Symbol<Symbol.Name> getClassName(byte[] bytes, EspressoContext context) {
@@ -441,11 +465,7 @@ public final class ClassfileParser {
         verifyVersion(majorVersion, minorVersion);
 
         try (DebugCloseable closeable = CONSTANT_POOL.scope(context.getTimers())) {
-            if (constantPoolPatches == null) {
-                this.pool = ConstantPool.parse(context.getLanguage(), stream, this, majorVersion, minorVersion);
-            } else {
-                this.pool = ConstantPool.parse(context.getLanguage(), stream, this, constantPoolPatches, context, majorVersion, minorVersion);
-            }
+            this.pool = ConstantPool.parse(context.getLanguage(), stream, this, classDefinitionInfo.patches, context, majorVersion, minorVersion);
         }
 
         // JVM_ACC_MODULE is defined in JDK-9 and later.
@@ -582,12 +602,15 @@ public final class ClassfileParser {
                     RUNTIME_VISIBLE_TYPE_ANNOTATIONS | RUNTIME_INVISIBLE_TYPE_ANNOTATIONS | ANNOTATION_DEFAULT | SIGNATURE;
     private static final int fieldAnnotations = RUNTIME_VISIBLE_ANNOTATIONS | RUNTIME_INVISIBLE_ANNOTATIONS | RUNTIME_VISIBLE_TYPE_ANNOTATIONS | RUNTIME_INVISIBLE_TYPE_ANNOTATIONS | SIGNATURE;
     private static final int codeAnnotations = RUNTIME_VISIBLE_TYPE_ANNOTATIONS | RUNTIME_INVISIBLE_TYPE_ANNOTATIONS | SIGNATURE;
+    private static final int recordAnnotations = RUNTIME_VISIBLE_ANNOTATIONS | RUNTIME_INVISIBLE_ANNOTATIONS |
+                    RUNTIME_VISIBLE_TYPE_ANNOTATIONS | RUNTIME_INVISIBLE_TYPE_ANNOTATIONS | SIGNATURE;
 
     public enum InfoType {
         Class(classAnnotations),
         Method(methodAnnotations),
         Field(fieldAnnotations),
-        Code(codeAnnotations);
+        Code(codeAnnotations),
+        Record(recordAnnotations);
 
         final int annotations;
 
@@ -656,6 +679,9 @@ public final class ClassfileParser {
             } else if (infoType.supports(SIGNATURE) && attributeName.equals(Name.Signature)) {
                 if (context.getJavaVersion().java9OrLater() && signature != null) {
                     throw ConstantPool.classFormatError("Duplicate AnnotationDefault attribute");
+                }
+                if (attributeSize != 2) {
+                    throw ConstantPool.classFormatError("Invalid attribute_length value for signature attribute: " + attributeSize + " != 2");
                 }
                 return signature = parseSignatureAttribute(attributeName);
             }
@@ -747,7 +773,7 @@ public final class ClassfileParser {
                 }
             }
             attributeCount = stream.readU2();
-            methodAttributes = new Attribute[attributeCount];
+            methodAttributes = spawnAttributesArray(attributeCount);
         }
 
         CodeAttribute codeAttribute = null;
@@ -794,11 +820,15 @@ public final class ClassfileParser {
                         Symbol<Type> annotType = constant.value();
                         if (Type.java_lang_invoke_LambdaForm$Compiled.equals(annotType)) {
                             methodFlags |= ACC_LAMBDA_FORM_COMPILED;
-                        } else if (Type.java_lang_invoke_LambdaForm$Hidden.equals(annotType)) {
-                            methodFlags |= ACC_LAMBDA_FORM_HIDDEN;
+                        } else if (Type.java_lang_invoke_LambdaForm$Hidden.equals(annotType) ||
+                                        Type.jdk_internal_vm_annotation_Hidden.equals(annotType)) {
+                            methodFlags |= ACC_HIDDEN;
                         } else if (Type.sun_reflect_CallerSensitive.equals(annotType) ||
                                         Type.jdk_internal_reflect_CallerSensitive.equals(annotType)) {
                             methodFlags |= ACC_CALLER_SENSITIVE;
+                        } else if (Type.java_lang_invoke_ForceInline.equals(annotType) ||
+                                        Type.jdk_internal_vm_annotation_ForceInline.equals(annotType)) {
+                            methodFlags |= ACC_FORCE_INLINE;
                         }
                     }
                     methodAttributes[i] = runtimeVisibleAnnotations = new Attribute(attributeName, data);
@@ -835,7 +865,15 @@ public final class ClassfileParser {
             }
         }
 
+        if (classDefinitionInfo.isHidden()) {
+            methodFlags |= ACC_HIDDEN;
+        }
+
         return ParserMethod.create(methodFlags, name, signature, methodAttributes);
+    }
+
+    private static Attribute[] spawnAttributesArray(int attributeCount) {
+        return attributeCount == 0 ? Attribute.EMPTY_ARRAY : new Attribute[attributeCount];
     }
 
     private static int parseAnnotation(ClassfileStream subStream) {
@@ -900,10 +938,12 @@ public final class ClassfileParser {
         EnclosingMethodAttribute enclosingMethod = null;
         BootstrapMethodsAttribute bootstrapMethods = null;
         InnerClassesAttribute innerClasses = null;
+        PermittedSubclassesAttribute permittedSubclasses = null;
+        RecordAttribute record = null;
 
         CommonAttributeParser commonAttributeParser = new CommonAttributeParser(InfoType.Class);
 
-        final Attribute[] classAttributes = new Attribute[attributeCount];
+        final Attribute[] classAttributes = spawnAttributesArray(attributeCount);
         for (int i = 0; i < attributeCount; i++) {
             final int attributeNameIndex = stream.readU2();
             final Symbol<Name> attributeName = pool.symbolAt(attributeNameIndex, "attribute name");
@@ -957,6 +997,16 @@ public final class ClassfileParser {
                         throw ConstantPool.classFormatError("Classfile cannot have both a nest members and a nest host attribute.");
                     }
                     classAttributes[i] = nestMembers = parseNestMembers(attributeName);
+                } else if (majorVersion >= JAVA_14_VERSION && attributeName.equals(Name.Record)) {
+                    if (record != null) {
+                        throw ConstantPool.classFormatError("Duplicate Record attribute");
+                    }
+                    classAttributes[i] = record = parseRecord(attributeName);
+                } else if (majorVersion >= JAVA_17_VERSION && attributeName.equals(Name.PermittedSubclasses)) {
+                    if (permittedSubclasses != null) {
+                        throw ConstantPool.classFormatError("Duplicate PermittedSubclasses attribute");
+                    }
+                    classAttributes[i] = permittedSubclasses = parsePermittedSubclasses(attributeName);
                 } else {
                     Attribute attr = commonAttributeParser.parseCommonAttribute(attributeName, attributeSize);
                     // stream.skip(attributeSize);
@@ -1005,29 +1055,32 @@ public final class ClassfileParser {
         if (entryCount == 0) {
             return LineNumberTableAttribute.EMPTY;
         }
-        LineNumberTableAttribute.Entry[] entries = new LineNumberTableAttribute.Entry[entryCount];
+        char[] entries = new char[entryCount << 1];
         for (int i = 0; i < entryCount; i++) {
-            int bci = stream.readU2();
-            int lineNumber = stream.readU2();
-            entries[i] = new LineNumberTableAttribute.Entry(bci, lineNumber);
+            int idx = i << 1;
+            char bci = (char) stream.readU2();
+            char lineNumber = (char) stream.readU2();
+            entries[idx] = bci;
+            entries[idx + 1] = lineNumber;
         }
         return new LineNumberTableAttribute(name, entries);
     }
 
-    private LocalVariableTable parseLocalVariableAttribute(Symbol<Name> name) {
+    private LocalVariableTable parseLocalVariableAttribute(Symbol<Name> name, int codeLength, int maxLocals) {
         assert Name.LocalVariableTable.equals(name);
-        return parseLocalVariableTable(name);
+        return parseLocalVariableTable(name, codeLength, maxLocals);
     }
 
-    private LocalVariableTable parseLocalVariableTypeAttribute(Symbol<Name> name) {
+    private LocalVariableTable parseLocalVariableTypeAttribute(Symbol<Name> name, int codeLength, int maxLocals) {
         assert Name.LocalVariableTypeTable.equals(name);
-        return parseLocalVariableTable(name);
+        return parseLocalVariableTable(name, codeLength, maxLocals);
     }
 
-    private LocalVariableTable parseLocalVariableTable(Symbol<Name> name) {
+    private LocalVariableTable parseLocalVariableTable(Symbol<Name> name, int codeLength, int maxLocals) {
+        boolean isLVTT = Name.LocalVariableTypeTable.equals(name);
         int entryCount = stream.readU2();
         if (entryCount == 0) {
-            return LocalVariableTable.EMPTY;
+            return isLVTT ? LocalVariableTable.EMPTY_LVTT : LocalVariableTable.EMPTY_LVT;
         }
         Local[] locals = new Local[entryCount];
         for (int i = 0; i < entryCount; i++) {
@@ -1037,8 +1090,32 @@ public final class ClassfileParser {
             int descIndex = stream.readU2();
             int slot = stream.readU2();
 
+            if (bci < 0 || bci >= codeLength) {
+                throw ConstantPool.classFormatError("Invalid local variable table attribute entry: start_pc out of bounds: " + bci);
+            }
+            if (bci + length > codeLength) {
+                throw ConstantPool.classFormatError("Invalid local variable table attribute entry: start_pc + length out of bounds: " + (bci + length));
+            }
+
             Utf8Constant poolName = pool.utf8At(nameIndex);
             Utf8Constant typeName = pool.utf8At(descIndex);
+
+            typeName.validateUTF8();
+            poolName.validateFieldName();
+
+            int extraSlot = 0;
+            if (!isLVTT) {
+                typeName.validateType(false);
+                Symbol<Type> type = typeName.value();
+                if (type == Type._long || type == Type._double) {
+                    extraSlot = 1;
+                }
+            }
+
+            if (slot + extraSlot >= maxLocals) {
+                throw ConstantPool.classFormatError("Invalid local variable table attribute entry: index points to an invalid frame slot: " + slot);
+            }
+
             locals[i] = new Local(poolName, typeName, bci, bci + length, slot);
 
         }
@@ -1048,6 +1125,7 @@ public final class ClassfileParser {
     private SignatureAttribute parseSignatureAttribute(Symbol<Name> name) {
         assert Name.Signature.equals(name);
         int signatureIndex = stream.readU2();
+        pool.utf8At(signatureIndex).validateUTF8();
         return new SignatureAttribute(name, signatureIndex);
     }
 
@@ -1226,6 +1304,14 @@ public final class ClassfileParser {
         return false;
     }
 
+    private StackMapTableAttribute parseStackMapTableAttribute(Symbol<Name> attributeName, int attributeSize) {
+        if (context.needsVerify(loader)) {
+            return new StackMapTableAttribute(attributeName, stream.readByteArray(attributeSize));
+        }
+        stream.skip(attributeSize);
+        return StackMapTableAttribute.EMPTY;
+    }
+
     private NestHostAttribute parseNestHostAttribute(Symbol<Name> attributeName) {
         int hostClassIndex = stream.readU2();
         pool.classAt(hostClassIndex).validate(pool);
@@ -1242,6 +1328,52 @@ public final class ClassfileParser {
             classes[i] = pos;
         }
         return new NestMembersAttribute(attributeName, classes);
+    }
+
+    private PermittedSubclassesAttribute parsePermittedSubclasses(Symbol<Name> attributeName) {
+        assert PermittedSubclassesAttribute.NAME.equals(attributeName);
+        if ((classFlags & ACC_FINAL) != 0) {
+            throw ConstantPool.classFormatError("A final class may not declare a permitted subclasses attribute.");
+        }
+        int numberOfClasses = stream.readU2();
+        if (numberOfClasses == 0) {
+            return PermittedSubclassesAttribute.EMPTY;
+        }
+        char[] classes = new char[numberOfClasses];
+        for (int i = 0; i < numberOfClasses; i++) {
+            int pos = stream.readU2();
+            pool.classAt(pos).validate(pool);
+            classes[i] = (char) pos;
+        }
+        return new PermittedSubclassesAttribute(attributeName, classes);
+    }
+
+    private RecordAttribute parseRecord(Symbol<Name> recordAttributeName) {
+        assert RecordAttribute.NAME.equals(recordAttributeName);
+        int count = stream.readU2();
+        RecordAttribute.RecordComponentInfo[] components = new RecordAttribute.RecordComponentInfo[count];
+        for (int i = 0; i < count; i++) {
+            final int name = stream.readU2();
+            final int descriptor = stream.readU2();
+            pool.utf8At(name).validateUTF8();
+            pool.utf8At(descriptor).validateType(false);
+            Attribute[] componentAttributes = parseRecordComponentAttributes();
+            components[i] = new RecordAttribute.RecordComponentInfo(name, descriptor, componentAttributes);
+        }
+        return new RecordAttribute(recordAttributeName, components);
+    }
+
+    private Attribute[] parseRecordComponentAttributes() {
+        final int size = stream.readU2();
+        Attribute[] componentAttributes = new Attribute[size];
+        CommonAttributeParser commonAttributeParser = new CommonAttributeParser(InfoType.Record);
+        for (int j = 0; j < size; j++) {
+            final Symbol<Name> attributeName = pool.symbolAt(stream.readU2(), "attribute name");
+            final int attributeSize = stream.readS4();
+            Attribute attr = commonAttributeParser.parseCommonAttribute(attributeName, attributeSize);
+            componentAttributes[j] = attr == null ? new Attribute(attributeName, stream.readByteArray(attributeSize)) : attr;
+        }
+        return componentAttributes;
     }
 
     private InnerClassesAttribute.Entry parseInnerClassEntry() {
@@ -1275,84 +1407,6 @@ public final class ClassfileParser {
         return new EnclosingMethodAttribute(name, classIndex, methodIndex);
     }
 
-    private StackMapFrame parseStackMapFrame() {
-        int frameType = stream.readU1();
-        if (frameType < SAME_FRAME_BOUND) {
-            return new SameFrame(frameType);
-        }
-        if (frameType < SAME_LOCALS_1_STACK_ITEM_BOUND) {
-            VerificationTypeInfo stackItem = parseVerificationTypeInfo();
-            return new SameLocals1StackItemFrame(frameType, stackItem);
-        }
-        if (frameType < SAME_LOCALS_1_STACK_ITEM_EXTENDED) {
-            // [128, 246] is reserved and still unused
-            throw ConstantPool.classFormatError("Encountered reserved StackMapFrame tag: " + frameType);
-        }
-        if (frameType == SAME_LOCALS_1_STACK_ITEM_EXTENDED) {
-            int offsetDelta = stream.readU2();
-            VerificationTypeInfo stackItem = parseVerificationTypeInfo();
-            return new SameLocals1StackItemFrameExtended(frameType, offsetDelta, stackItem);
-        }
-        if (frameType < CHOP_BOUND) {
-            int offsetDelta = stream.readU2();
-            return new ChopFrame(frameType, offsetDelta);
-        }
-        if (frameType == SAME_FRAME_EXTENDED) {
-            int offsetDelta = stream.readU2();
-            return new SameFrameExtended(frameType, offsetDelta);
-        }
-        if (frameType < APPEND_FRAME_BOUND) {
-            int offsetDelta = stream.readU2();
-            int appendLength = frameType - SAME_FRAME_EXTENDED;
-            VerificationTypeInfo[] locals = new VerificationTypeInfo[appendLength];
-            for (int i = 0; i < appendLength; i++) {
-                locals[i] = parseVerificationTypeInfo();
-            }
-            return new AppendFrame(frameType, offsetDelta, locals);
-        }
-        if (frameType == FULL_FRAME) {
-            int offsetDelta = stream.readU2();
-            int localsLength = stream.readU2();
-            VerificationTypeInfo[] locals = new VerificationTypeInfo[localsLength];
-            for (int i = 0; i < localsLength; i++) {
-                locals[i] = parseVerificationTypeInfo();
-            }
-            int stackLength = stream.readU2();
-            VerificationTypeInfo[] stack = new VerificationTypeInfo[stackLength];
-            for (int i = 0; i < stackLength; i++) {
-                stack[i] = parseVerificationTypeInfo();
-            }
-            return new FullFrame(frameType, offsetDelta, locals, stack);
-        }
-        throw ConstantPool.classFormatError("Unrecognized StackMapFrame tag: " + frameType);
-    }
-
-    private VerificationTypeInfo parseVerificationTypeInfo() {
-        int tag = stream.readU1();
-        if (tag < ITEM_InitObject) {
-            return PrimitiveTypeInfo.get(tag);
-        }
-        switch (tag) {
-            case ITEM_InitObject:
-                return UninitializedThis.get();
-            case ITEM_Object:
-                return new ReferenceVariable(stream.readU2());
-            case ITEM_NewObject:
-                return new UninitializedVariable(stream.readU2());
-            default:
-                throw ConstantPool.classFormatError("Unrecognized verification type info tag: " + tag);
-        }
-    }
-
-    private StackMapTableAttribute parseStackMapTableAttribute(Symbol<Name> name) {
-        int entryCount = stream.readU2();
-        StackMapFrame[] entries = new StackMapFrame[entryCount];
-        for (int i = 0; i < entryCount; i++) {
-            entries[i] = parseStackMapFrame();
-        }
-        return new StackMapTableAttribute(name, entries);
-    }
-
     private CodeAttribute parseCodeAttribute(Symbol<Name> name) {
         int maxStack = stream.readU2();
         int maxLocals = stream.readU2();
@@ -1374,7 +1428,8 @@ public final class ClassfileParser {
         }
 
         int attributeCount = stream.readU2();
-        final Attribute[] codeAttributes = new Attribute[attributeCount];
+        final Attribute[] codeAttributes = spawnAttributesArray(attributeCount);
+        int totalLocalTableCount = 0;
 
         CommonAttributeParser commonAttributeParser = new CommonAttributeParser(InfoType.Code);
 
@@ -1390,22 +1445,15 @@ public final class ClassfileParser {
             if (attributeName.equals(Name.LineNumberTable)) {
                 codeAttributes[i] = parseLineNumberTable(attributeName);
             } else if (attributeName.equals(Name.LocalVariableTable)) {
-                codeAttributes[i] = parseLocalVariableAttribute(attributeName);
+                codeAttributes[i] = parseLocalVariableAttribute(attributeName, codeLength, maxLocals);
+                totalLocalTableCount++;
             } else if (attributeName.equals(Name.LocalVariableTypeTable)) {
-                codeAttributes[i] = parseLocalVariableTypeAttribute(attributeName);
+                codeAttributes[i] = parseLocalVariableTypeAttribute(attributeName, codeLength, maxLocals);
             } else if (attributeName.equals(Name.StackMapTable)) {
                 if (stackMapTable != null) {
                     throw ConstantPool.classFormatError("Duplicate StackMapTable attribute");
                 }
-                codeAttributes[i] = stackMapTable = parseStackMapTableAttribute(attributeName);
-                // GR-19627 HotSpot's ad-hoc behavior: Truncated StackMapTable attributes throws
-                // either VerifyError or ClassFormatError only if verified. Here the
-                // attribute is marked for the verifier.
-                int remaining = attributeSize - (stream.getPosition() - startPosition);
-                if (remaining > 0) {
-                    stream.skip(remaining);
-                    stackMapTable.setTruncated();
-                }
+                codeAttributes[i] = stackMapTable = parseStackMapTableAttribute(attributeName, attributeSize);
             } else {
                 Attribute attr = commonAttributeParser.parseCommonAttribute(attributeName, attributeSize);
                 // stream.skip(attributeSize);
@@ -1417,11 +1465,49 @@ public final class ClassfileParser {
             }
         }
 
+        if (totalLocalTableCount > 0) {
+            validateLocalTables(codeAttributes);
+        }
+
         return new CodeAttribute(name, maxStack, maxLocals, code, entries, codeAttributes, majorVersion);
+    }
+
+    private void validateLocalTables(Attribute[] codeAttributes) {
+        if (getMajorVersion() < JAVA_1_5_VERSION) {
+            return;
+        }
+        EconomicMap<Local, Boolean> table = EconomicMap.create(Local.localEquivalence);
+        ArrayList<LocalVariableTable> typeTables = new ArrayList<>();
+        for (Attribute attr : codeAttributes) {
+            if (attr.getName() == Name.LocalVariableTable) {
+                LocalVariableTable localTable = (LocalVariableTable) attr;
+                for (Local local : localTable.getLocals()) {
+                    if (table.put(local, false) != null) {
+                        throw ConstantPool.classFormatError("Duplicate local in local variable table: " + local);
+                    }
+                }
+            } else if (attr.getName() == Name.LocalVariableTypeTable) {
+                typeTables.add((LocalVariableTable) attr);
+            }
+        }
+        for (LocalVariableTable typeTable : typeTables) {
+            for (Local local : typeTable.getLocals()) {
+                Boolean present = table.put(local, true);
+                if (present == null) {
+                    throw ConstantPool.classFormatError("Local in local variable type table does not match any local variable table entry: " + local);
+                }
+                if (present) {
+                    throw ConstantPool.classFormatError("Duplicate local in local variable type table: " + local);
+                }
+            }
+        }
     }
 
     private ExceptionHandler[] parseExceptionHandlerEntries() {
         int count = stream.readU2();
+        if (count == 0) {
+            return ExceptionHandler.EMPTY_ARRAY;
+        }
         ExceptionHandler[] entries = new ExceptionHandler[count];
         for (int i = 0; i < count; i++) {
             int startPc = stream.readU2();
@@ -1489,7 +1575,7 @@ public final class ClassfileParser {
         }
 
         final int attributeCount = stream.readU2();
-        final Attribute[] fieldAttributes = new Attribute[attributeCount];
+        final Attribute[] fieldAttributes = spawnAttributesArray(attributeCount);
 
         ConstantValueAttribute constantValue = null;
         CommonAttributeParser commonAttributeParser = new CommonAttributeParser(InfoType.Field);
@@ -1618,6 +1704,13 @@ public final class ClassfileParser {
                 throw ConstantPool.classFormatError(classType + " superinterfaces cannot contain arrays nor primitives");
             }
             interfaces[i] = interfaceType;
+        }
+        // Check for duplicate interfaces in the interface array.
+        Set<Symbol<Type>> present = new HashSet<>(interfaces.length);
+        for (Symbol<Type> t : interfaces) {
+            if (!present.add(t)) {
+                throw ConstantPool.classFormatError("Duplicate interface name in classfile: " + t);
+            }
         }
         return interfaces;
     }

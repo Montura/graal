@@ -1,11 +1,33 @@
+#
+# Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
+# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
+#
+# This code is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License version 2 only, as
+# published by the Free Software Foundation.
+#
+# This code is distributed in the hope that it will be useful, but WITHOUT
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+# FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+# version 2 for more details (a copy is included in the LICENSE file that
+# accompanied this code).
+#
+# You should have received a copy of the GNU General Public License version
+# 2 along with this work; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301 USA.
+#
+# Please contact Oracle, 500 Oracle Parkway, Redwood Shores, CA 94065 USA
+# or visit www.oracle.com if you need additional information or have any
+# questions.
+#
 suite = {
-    "mxversion": "5.271.0",
+    "mxversion": "5.300.4",
     "name": "tools",
     "defaultLicense" : "GPLv2-CPE",
 
     "groupId" : "org.graalvm.tools",
-    "version" : "21.1.0",
-    "release" : True,
+    "version" : "22.1.1.0",
+    "release" : False,
     "url" : "http://openjdk.java.net/projects/graal",
     "developer" : {
         "name" : "GraalVM Development",
@@ -38,16 +60,18 @@ suite = {
             "dependencies" : [
                 "truffle:TRUFFLE_API",
                 "TRUFFLE_PROFILER",
-                "NanoHTTPD",
-                "NanoHTTPD-WebSocket",
                 "truffle:TruffleJSON",
                 "TruffleJWS",
+            ],
+            "requires" : [
+                "java.logging",
+                "jdk.unsupported", # sun.misc.Unsafe
             ],
             "exports" : [
               "<package-info>", # exports all packages containing package-info.java
               "com.oracle.truffle.tools.chromeinspector.instrument to org.graalvm.truffle"
             ],
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "checkstyleVersion" : "8.8",
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
@@ -62,7 +86,7 @@ suite = {
                 "truffle:TRUFFLE_SL",
                 "mx:JUNIT",
             ],
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "workingSets" : "Tools",
@@ -76,7 +100,7 @@ suite = {
             "exports" : [
               "<package-info>", # exports all packages containing package-info.java
             ],
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "workingSets" : "Tools",
@@ -87,10 +111,13 @@ suite = {
             "dependencies" : [
                 "org.graalvm.tools.insight",
             ],
+            "requires" : [
+                "jdk.unsupported", # sun.misc.Unsafe
+            ],
             "exports" : [
               "<package-info>", # exports all packages containing package-info.java
             ],
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "workingSets" : "Tools",
@@ -104,7 +131,7 @@ suite = {
             "exports" : [
               "<package-info>", # exports all packages containing package-info.java
             ],
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "workingSets" : "Tools",
@@ -120,7 +147,7 @@ suite = {
             ],
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "workingSets" : "Tools",
         },
         "com.oracle.truffle.tools.profiler" : {
@@ -129,14 +156,15 @@ suite = {
             "dependencies" : [
                 "truffle:TRUFFLE_API",
                 "truffle:TruffleJSON",
-                ],
+            ],
+            "requires" : ["java.logging"],
             "exports" : [
               "<package-info>", # exports all packages containing package-info.java
               "com.oracle.truffle.tools.profiler.impl to org.graalvm.truffle",
             ],
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "workingSets" : "Tools",
         },
         "com.oracle.truffle.tools.profiler.test" : {
@@ -149,7 +177,7 @@ suite = {
             ],
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "workingSets" : "Tools",
         },
         "com.oracle.truffle.tools.coverage" : {
@@ -165,7 +193,7 @@ suite = {
             ],
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "workingSets" : "Tools",
         },
         "com.oracle.truffle.tools.coverage.test" : {
@@ -178,7 +206,7 @@ suite = {
             ],
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "workingSets" : "Tools",
         },
         "com.oracle.truffle.tools.dap" : {
@@ -188,13 +216,14 @@ suite = {
                 "truffle:TRUFFLE_API",
                 "truffle:TruffleJSON",
             ],
+            "requires" : ["java.logging"],
             "exports" : [
               "<package-info>", # exports all packages containing package-info.java
               "com.oracle.truffle.tools.dap.instrument to org.graalvm.truffle"
             ],
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "workingSets" : "Tools",
         },
         "com.oracle.truffle.tools.dap.test" : {
@@ -205,9 +234,10 @@ suite = {
                 "truffle:TRUFFLE_TEST",
                 "mx:JUNIT"
             ],
+            "requires" : ["java.logging"],
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "workingSets" : "Tools",
         },
         "com.oracle.truffle.tools.warmup" : {
@@ -223,7 +253,7 @@ suite = {
             ],
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "workingSets" : "Tools",
         },
         "com.oracle.truffle.tools.warmup.test" : {
@@ -236,7 +266,7 @@ suite = {
             ],
             "annotationProcessors" : ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "checkstyle" : "com.oracle.truffle.tools.chromeinspector",
-            "javaCompliance" : "8+",
+            "javaCompliance" : "11+",
             "workingSets" : "Tools",
         },
         "org.graalvm.tools.api.lsp": {
@@ -245,8 +275,11 @@ suite = {
             "dependencies": [
                 "truffle:TRUFFLE_API",
             ],
+            "requires" : [
+                "jdk.unsupported", # sun.misc.Unsafe
+            ],
             "checkstyle": "com.oracle.truffle.tools.chromeinspector",
-            "javaCompliance": "8+",
+            "javaCompliance": "11+",
             "annotationProcessors": ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "workingSets": "Tools",
         },
@@ -257,8 +290,11 @@ suite = {
                 "org.graalvm.tools.api.lsp",
                 "truffle:TruffleJSON"
             ],
+            "requires" : [
+                "java.logging",
+            ],
             "checkstyle": "com.oracle.truffle.tools.chromeinspector",
-            "javaCompliance": "8+",
+            "javaCompliance": "11+",
             "annotationProcessors": ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "workingSets": "Tools",
         },
@@ -271,53 +307,49 @@ suite = {
                 "mx:JUNIT"
             ],
             "checkstyle": "com.oracle.truffle.tools.chromeinspector",
-            "javaCompliance": "8+",
+            "javaCompliance": "11+",
             "annotationProcessors": ["truffle:TRUFFLE_DSL_PROCESSOR"],
             "workingSets": "Tools",
         },
     },
 
     "libraries": {
-        "NanoHTTPD" : {
-            "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/nanohttpd-2.3.2-efb2ebf85a2b06f7c508aba9eaad5377e3a01e81.jar"],
-            "sha1" : "7d28e2828bfe2ac04dcb8779aded934ac7dc1e52",
-        },
-        "NanoHTTPD-WebSocket" : {
-            "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/nanohttpd-websocket-2.3.2-efb2ebf85a2b06f7c508aba9eaad5377e3a01e81.jar"],
-            "sha1" : "a8f5b9e7387e00a57d31be320a8246a7c8128aa4",
-        },
         "TruffleJWS" : {
-          "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/trufflejws-1.5.1.jar"],
-          "sha1" : "5576fc4a93fe0fc01d236e92803543906d690c5f",
-          "sourceUrls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/trufflejws-1.5.1-src.jar"],
-          "sourceSha1" : "298db2b3c573f9e76a5a7a60a49c7ceb5ddd35f7",
+          "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/trufflejws-1.5.2.jar"],
+          "sha1" : "9a0b23fb70ec828405ade9252c2e1e946a2eb455",
+          "sourceUrls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/trufflejws-1.5.2-src.jar"],
+          "sourceSha1" : "4b6f04d25ae52ace16f8ff9e7561f965e04f5848",
         },
         "VISUALVM_COMMON" : {
-            "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/visualvm/visualvm-21.1-2.tar.gz"],
-            "sha1" : "654e737c820fb5d390c2b9ef177549d5373fcdf4",
+            "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/visualvm/visualvm-22.1-4.tar.gz"],
+            "sha1" : "73e17b7faf43a21e611cc416d7b857f29e69dfa9",
         },
         "VISUALVM_PLATFORM_SPECIFIC" : {
             "os_arch" : {
                 "linux" : {
                     "amd64" : {
-                        "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/visualvm/visualvm-21.1-2-linux-amd64.tar.gz"],
-                        "sha1" : "cc014df2df4eaf44aae65d996b8df88e93493915",
+                        "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/visualvm/visualvm-22.1-4-linux-amd64.tar.gz"],
+                        "sha1" : "2ac0fad59bed39a584e71e221d56af4c63686528",
                     },
                     "aarch64" : {
-                        "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/visualvm/visualvm-21.1-2-linux-aarch64.tar.gz"],
-                        "sha1" : "d920ee2ba6954f94bafd4f2f86740253007c663d",
+                        "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/visualvm/visualvm-22.1-4-linux-aarch64.tar.gz"],
+                        "sha1" : "0bb3da2193f540f7e7ba3b1cbae41804cc1a79a0",
                     }
                 },
                 "darwin" : {
                     "amd64" : {
-                        "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/visualvm/visualvm-21.1-2-macosx-x86_64.tar.gz"],
-                        "sha1" : "3a76b698cfe6c0c3933389e4a861cb5208113604",
+                        "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/visualvm/visualvm-22.1-4-macos.tar.gz"],
+                        "sha1" : "9093809165245ebad877ac99cf1ca9e62d9202d7",
+                    },
+                    "aarch64" : {
+                        "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/visualvm/visualvm-22.1-4-macos.tar.gz"],
+                        "sha1" : "9093809165245ebad877ac99cf1ca9e62d9202d7",
                     }
                 },
                 "windows" : {
                     "amd64" : {
-                        "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/visualvm/visualvm-21.1-2-windows-amd64.tar.gz"],
-                        "sha1" : "1548bd9448bced3cc1089c562bdb1915dbc00c73",
+                        "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/visualvm/visualvm-22.1-4-windows-amd64.tar.gz"],
+                        "sha1" : "ab19aada42bca24d553d26eaa9c696a412c93489",
                     }
                 },
             }
@@ -564,38 +596,6 @@ suite = {
             "description" : "Truffle Debug Protocol Server distribution for the GraalVM",
             "layout" : {
                 "native-image.properties" : "file:mx.tools/tools-dap.properties",
-            },
-        },
-        "TRUFFLE_WARMUP_ESTIMATOR": {
-            "subDir": "src",
-            "dependencies": [
-                "com.oracle.truffle.tools.warmup",
-            ],
-            "distDependencies" : [
-                "truffle:TRUFFLE_API",
-            ],
-            "maven" : {
-              "artifactId" : "warmup",
-            },
-            "description" : "Truffle warmup estimation tool.",
-        },
-        "TRUFFLE_WARMUP_ESTIMATOR_TEST": {
-            "subDir": "src",
-            "dependencies": [
-                "com.oracle.truffle.tools.warmup.test",
-            ],
-            "distDependencies" : [
-                "truffle:TRUFFLE_TEST",
-                "TRUFFLE_WARMUP_ESTIMATOR",
-            ],
-            "description" : "Tests for the truffle warmup estimator tool.",
-            "maven" : False,
-        },
-        "TRUFFLE_WARMUP_ESTIMATOR_GRAALVM_SUPPORT" : {
-            "native" : True,
-            "description" : "Truffle Profiler support distribution for the GraalVM",
-            "layout" : {
-                "native-image.properties" : "file:mx.tools/tools-profiler.properties",
             },
         },
         "VISUALVM_GRAALVM_SUPPORT": {

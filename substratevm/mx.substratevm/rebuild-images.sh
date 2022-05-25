@@ -76,10 +76,6 @@ fi
 function common() {
     cmd_line+=("${graalvm_home}/bin/native-image")
 
-    if $(${graalvm_home}/bin/native-image --help-extra | grep -q "\-\-no\-server"); then
-        cmd_line+=("--no-server")
-    fi
-
     if [[ -f "${graalvm_home}/lib/svm/builder/svm-enterprise.jar" ]]; then
         cmd_line+=("-g")
     fi
@@ -104,6 +100,12 @@ function launcher() {
     fi
 }
 
+function library() {
+    common
+    local launcher="$1"
+    cmd_line+=("--macro:${launcher}-library")
+}
+
 for binary in "${to_build[@]}"; do
     cmd_line=()
     case "${binary}" in
@@ -114,7 +116,7 @@ for binary in "${to_build[@]}"; do
             libpolyglot
             ;;
         js)
-            launcher js
+            library jsvm
             ;;
         llvm)
             launcher lli

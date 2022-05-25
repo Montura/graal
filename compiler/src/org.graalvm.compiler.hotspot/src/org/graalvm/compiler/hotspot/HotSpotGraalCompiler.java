@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -53,6 +53,7 @@ import org.graalvm.compiler.nodes.Cancellable;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.StructuredGraph.AllowAssumptions;
 import org.graalvm.compiler.nodes.graphbuilderconf.GraphBuilderConfiguration;
+import org.graalvm.compiler.nodes.spi.ProfileProvider;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.OptimisticOptimizations;
 import org.graalvm.compiler.phases.OptimisticOptimizations.Optimization;
@@ -182,38 +183,34 @@ public class HotSpotGraalCompiler implements GraalJVMCICompiler, Cancellable, JV
         return graalRuntime.isShutdown();
     }
 
-    public StructuredGraph createGraph(ResolvedJavaMethod method, int entryBCI, boolean useProfilingInfo, CompilationIdentifier compilationId, OptionValues options, DebugContext debug) {
-        HotSpotBackend backend = graalRuntime.getHostBackend();
-        HotSpotProviders providers = backend.getProviders();
-        final boolean isOSR = entryBCI != JVMCICompiler.INVOCATION_ENTRY_BCI;
+    public StructuredGraph createGraph(ResolvedJavaMethod method, int entryBCI, ProfileProvider profileProvider, CompilationIdentifier compilationId, OptionValues options, DebugContext debug) {
         AllowAssumptions allowAssumptions = AllowAssumptions.ifTrue(OptAssumptions.getValue(options));
-        StructuredGraph graph = method.isNative() || isOSR ? null : providers.getReplacements().getIntrinsicGraph(method, compilationId, debug, allowAssumptions, this);
-
-        if (graph == null) {
-            SpeculationLog speculationLog = method.getSpeculationLog();
-            if (speculationLog != null) {
-                speculationLog.collectFailedSpeculations();
-            }
-            // @formatter:off
-            graph = new StructuredGraph.Builder(options, debug, allowAssumptions).
-                            method(method).
-                            cancellable(this).
-                            entryBCI(entryBCI).
-                            speculationLog(speculationLog).
-                            useProfilingInfo(useProfilingInfo).
-                            compilationId(compilationId).build();
-            // @formatter:on
+        SpeculationLog speculationLog = method.getSpeculationLog();
+        if (speculationLog != null) {
+            speculationLog.collectFailedSpeculations();
         }
-        return graph;
+        /*
+         * For methods that have plugins it would be possible to produces graphs from those plugins
+         * instead of the bytecodees but it's somewhat complicated to cover all the possible cases
+         * and doesn't seem worth the complexity as plugins are already processed at call sites. In
+         * HotSpot plugins are just optimized implementations of the method so compiling them as
+         * root methods isn't required for correctness.
+         */
+
+        // @formatter:off
+        return new StructuredGraph.Builder(options, debug, allowAssumptions).
+                                   method(method).
+                                   cancellable(this).
+                                   entryBCI(entryBCI).
+                                   speculationLog(speculationLog).
+                                   profileProvider(profileProvider).
+                                   compilationId(compilationId).build();
+        // @formatter:on
     }
 
-    public CompilationResult compileHelper(CompilationResultBuilderFactory crbf, CompilationResult result, StructuredGraph graph, ResolvedJavaMethod method, int entryBCI, boolean useProfilingInfo,
-                    OptionValues options) {
-        return compileHelper(crbf, result, graph, method, entryBCI, useProfilingInfo, false, options);
-    }
-
-    public CompilationResult compileHelper(CompilationResultBuilderFactory crbf, CompilationResult result, StructuredGraph graph, ResolvedJavaMethod method, int entryBCI, boolean useProfilingInfo,
-                    boolean shouldRetainLocalVariables, OptionValues options) {
+    public CompilationResult compileHelper(CompilationResultBuilderFactory crbf, CompilationResult result, StructuredGraph graph, boolean shouldRetainLocalVariables, OptionValues options) {
+        int entryBCI = graph.getEntryBCI();
+        ResolvedJavaMethod method = graph.method();
         assert options == graph.getOptions();
         HotSpotBackend backend = graalRuntime.getHostBackend();
         HotSpotProviders providers = backend.getProviders();
@@ -221,7 +218,7 @@ public class HotSpotGraalCompiler implements GraalJVMCICompiler, Cancellable, JV
 
         Suites suites = getSuites(providers, options);
         LIRSuites lirSuites = getLIRSuites(providers, options);
-        ProfilingInfo profilingInfo = useProfilingInfo ? method.getProfilingInfo(!isOSR, isOSR) : DefaultProfilingInfo.get(TriState.FALSE);
+        ProfilingInfo profilingInfo = graph.getProfileProvider() != null ? graph.getProfileProvider().getProfilingInfo(method, !isOSR, isOSR) : DefaultProfilingInfo.get(TriState.FALSE);
         OptimisticOptimizations optimisticOpts = getOptimisticOpts(profilingInfo, options);
 
         /*
@@ -237,23 +234,19 @@ public class HotSpotGraalCompiler implements GraalJVMCICompiler, Cancellable, JV
         PhaseSuite<HighTierContext> graphBuilderSuite = configGraphBuilderSuite(providers.getSuites().getDefaultGraphBuilderSuite(), shouldDebugNonSafepoints, shouldRetainLocalVariables, isOSR);
         GraalCompiler.compileGraph(graph, method, providers, backend, graphBuilderSuite, optimisticOpts, profilingInfo, suites, lirSuites, result, crbf, true);
 
-        if (!isOSR && useProfilingInfo) {
-            ProfilingInfo profile = profilingInfo;
-            profile.setCompilerIRSize(StructuredGraph.class, graph.getNodeCount());
+        if (!isOSR) {
+            profilingInfo.setCompilerIRSize(StructuredGraph.class, graph.getNodeCount());
         }
 
         return result;
     }
 
     public CompilationResult compile(StructuredGraph graph,
-                    ResolvedJavaMethod method,
-                    int entryBCI,
-                    boolean useProfilingInfo,
                     boolean shouldRetainLocalVariables,
                     CompilationIdentifier compilationId,
                     DebugContext debug) {
         CompilationResult result = new CompilationResult(compilationId);
-        return compileHelper(CompilationResultBuilderFactory.Default, result, graph, method, entryBCI, useProfilingInfo, shouldRetainLocalVariables, debug.getOptions());
+        return compileHelper(CompilationResultBuilderFactory.Default, result, graph, shouldRetainLocalVariables, debug.getOptions());
     }
 
     protected OptimisticOptimizations getOptimisticOpts(ProfilingInfo profilingInfo, OptionValues options) {

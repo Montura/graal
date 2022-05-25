@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -35,8 +35,6 @@ import java.util.stream.Collectors;
 
 import org.graalvm.compiler.debug.Assertions;
 import org.graalvm.compiler.hotspot.JVMCIVersionCheck.Version;
-import org.graalvm.compiler.hotspot.JVMCIVersionCheck.Version2;
-import org.graalvm.compiler.hotspot.JVMCIVersionCheck.Version3;
 import org.graalvm.compiler.serviceprovider.GraalServices;
 import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
 
@@ -124,16 +122,16 @@ public class GraalHotSpotVMConfigAccess {
      */
     public final String osArch;
 
-    protected static final Version JVMCI_0_55 = new Version2(0, 55);
-    protected static final Version JVMCI_21_1_b02 = new Version3(21, 1, 2);
-    public static final Version JVMCI_20_3_b04 = new Version3(20, 3, 4);
-    protected static final Version JVMCI_20_2_b04 = new Version3(20, 2, 4);
-    protected static final Version JVMCI_20_2_b01 = new Version3(20, 2, 1);
-    protected static final Version JVMCI_20_1_b01 = new Version3(20, 1, 1);
-    protected static final Version JVMCI_20_0_b03 = new Version3(20, 0, 3);
-    protected static final Version JVMCI_19_3_b03 = new Version3(19, 3, 3);
-    protected static final Version JVMCI_19_3_b04 = new Version3(19, 3, 4);
-    protected static final Version JVMCI_19_3_b07 = new Version3(19, 3, 7);
+    protected static final Version JVMCI_22_1_b01 = new Version(22, 1, 1);
+    protected static final Version JVMCI_21_1_b02 = new Version(21, 1, 2);
+    public static final Version JVMCI_20_3_b04 = new Version(20, 3, 4);
+    protected static final Version JVMCI_20_2_b04 = new Version(20, 2, 4);
+    protected static final Version JVMCI_20_2_b01 = new Version(20, 2, 1);
+    protected static final Version JVMCI_20_1_b01 = new Version(20, 1, 1);
+    protected static final Version JVMCI_20_0_b03 = new Version(20, 0, 3);
+    protected static final Version JVMCI_19_3_b03 = new Version(19, 3, 3);
+    protected static final Version JVMCI_19_3_b04 = new Version(19, 3, 4);
+    protected static final Version JVMCI_19_3_b07 = new Version(19, 3, 7);
 
     public static boolean jvmciGE(Version v) {
         return JVMCI && !JVMCI_VERSION.isLessThan(v);
@@ -147,7 +145,7 @@ public class GraalHotSpotVMConfigAccess {
     public static final boolean JDK_PRERELEASE;
     static {
         String vmVersion = getProperty("java.vm.version");
-        JVMCI_VERSION = Version.parse(vmVersion);
+        JVMCI_VERSION = Version.parse(vmVersion, Services.getSavedProperties());
         JDK_PRERELEASE = vmVersion.contains("SNAPSHOT") || vmVersion.contains("-dev");
         JVMCI = JVMCI_VERSION != null;
     }
@@ -376,34 +374,23 @@ public class GraalHotSpotVMConfigAccess {
     /**
      * @see HotSpotVMConfigAccess#getFlag(String, Class, Object)
      */
-    @SuppressWarnings("deprecation")
     public <T> T getFlag(String name, Class<T> type, T notPresent, boolean expectPresent) {
         if (expectPresent) {
             return getFlag(name, type);
         }
+        // Expecting flag not to be present
         if (Assertions.assertionsEnabled()) {
             // There's more overhead for checking unexpectedly
-            // present flag values due to the fact that a VM call
-            // not exposed by JVMCI is needed to determine whether
-            // a flag value is available. As such, only pay the
-            // overhead when running with assertions enabled.
-            T sentinel;
-            if (type == Boolean.class) {
-                sentinel = type.cast(new Boolean(false));
-            } else if (type == Byte.class) {
-                sentinel = type.cast(new Byte((byte) 123));
-            } else if (type == Integer.class) {
-                sentinel = type.cast(new Integer(1234567890));
-            } else if (type == Long.class) {
-                sentinel = type.cast(new Long(1234567890987654321L));
-            } else if (type == String.class) {
-                sentinel = type.cast(new String("1234567890987654321"));
-            } else {
-                throw new JVMCIError("Unsupported flag type: " + type.getName());
-            }
-            T value = access.getFlag(name, type, sentinel);
-            if (value != sentinel) {
+            // present flag values due to the fact that private
+            // JVMCI method (i.e., jdk.vm.ci.hotspot.CompilerToVM.getFlagValue)
+            // is needed to determine whether a flag value is available.
+            // As such, only incur the overhead when running with assertions enabled.
+            try {
+                T value = access.getFlag(name, type, null);
+                // Flag value present -> fail
                 recordError(name, unexpected, String.valueOf(value));
+            } catch (JVMCIError e) {
+                // Flag value not present -> pass
             }
         }
         return access.getFlag(name, type, notPresent);

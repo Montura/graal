@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -98,6 +98,19 @@ public final class CompilerDirectives {
      * @since 0.8 or earlier
      */
     public static boolean inInterpreter() {
+        return true;
+    }
+
+    /**
+     * Returns a boolean value indicating whether the method is executed in a compilation tier which
+     * can be replaced with a higher tier (e.g. interpretation tier can be replaced by a first tier,
+     * a first tier by a second tier compilation).
+     *
+     * @return {@code true} when executed in the first tier Truffle compilation, {@code false}
+     *         otherwise.
+     * @since 22.0.0
+     */
+    public static boolean hasNextTier() {
         return true;
     }
 

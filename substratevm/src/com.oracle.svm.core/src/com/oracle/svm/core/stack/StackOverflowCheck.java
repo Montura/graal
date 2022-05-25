@@ -29,6 +29,7 @@ import org.graalvm.compiler.options.Option;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.word.UnsignedWord;
+import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.option.HostedOptionKey;
@@ -87,8 +88,28 @@ public interface StackOverflowCheck {
      * platforms use this direction.
      */
     interface OSSupport {
-        @Uninterruptible(reason = "Called while thread is being attached to the VM, i.e., when the thread state is not yet set up.")
+        /** The highest address of the stack or zero if not supported. */
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        default UnsignedWord lookupStackBase() {
+            return WordFactory.zero();
+        }
+
+        /** The lowest address of the stack. */
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
         UnsignedWord lookupStackEnd();
+
+        /**
+         * The lowest address of the stack. If the OS reserved stack memory is larger than
+         * requestedStackSize, then the value for end of the stack memory returned may be before the
+         * real stack end.
+         *
+         * @param requestedStackSize requested stack size. If zero, then the value is ignored.
+         */
+        @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+        default UnsignedWord lookupStackEnd(@SuppressWarnings("unused") UnsignedWord requestedStackSize) {
+            return lookupStackEnd();
+        }
+
     }
 
     @Fold
@@ -105,11 +126,21 @@ public interface StackOverflowCheck {
     void initialize(IsolateThread thread);
 
     /**
+     * Determines whether the given address, e.g. a potential stack pointer, is within the safe
+     * boundaries of the current thread's stack (which includes the yellow zone if
+     * {@linkplain #makeYellowZoneAvailable() made available}.
+     */
+    boolean isWithinBounds(UnsignedWord address);
+
+    /**
      * Make the yellow zone of the stack available for usage. It must be eventually followed by a
      * call to {@link #protectYellowZone()}. Nested calls are supported: if the yellow zone is
      * already available, this function is a no-op.
      */
     void makeYellowZoneAvailable();
+
+    /** Check if the yellow zone of the stack available for usage. */
+    boolean isYellowZoneAvailable();
 
     /**
      * The inverse operation of {@link #makeYellowZoneAvailable}.
@@ -121,6 +152,15 @@ public interface StackOverflowCheck {
      */
     int yellowAndRedZoneSize();
 
+    /** @see #setState */
+    int getState();
+
+    /**
+     * Restore the specified state of the stack overflow checks obtained from {@link #getState}.
+     * This is intended for yielding and resuming continuations on a thread.
+     */
+    void setState(int state);
+
     /**
      * Disables all stack overflow checks for this thread. This operation is not reversible, i.e.,
      * it must only be called in the case of a fatal error where the VM is going to exit soon and
@@ -128,4 +168,9 @@ public interface StackOverflowCheck {
      */
     @Uninterruptible(reason = "Called by fatal error handling that is uninterruptible.")
     void disableStackOverflowChecksForFatalError();
+
+    /**
+     * Updates the stack overflow boundary of the current thread.
+     */
+    void updateStackOverflowBoundary();
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -44,10 +44,10 @@ import java.lang.reflect.Field;
 
 import com.oracle.truffle.api.dsl.Cached;
 import com.oracle.truffle.api.dsl.Specialization;
-import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.ValueProfile;
 
+import com.oracle.truffle.api.strings.TruffleString;
 import sun.misc.Unsafe;
 
 /**
@@ -113,29 +113,41 @@ public abstract class TRegexExecutorEntryNode extends Node {
 
     @Specialization
     Object doByteArray(byte[] input, int fromIndex, int index, int maxIndex) {
-        return executor.execute(executor.createLocals(input, fromIndex, index, maxIndex), false);
+        return executor.execute(executor.createLocals(input, fromIndex, index, maxIndex), TruffleString.CodeRange.BROKEN, false);
     }
 
     @Specialization(guards = "isCompactString(input)")
     Object doStringCompact(String input, int fromIndex, int index, int maxIndex) {
-        return executor.execute(executor.createLocals(input, fromIndex, index, maxIndex), true);
+        return executor.execute(executor.createLocals(input, fromIndex, index, maxIndex), TruffleString.CodeRange.LATIN_1, false);
     }
 
     @Specialization(guards = "!isCompactString(input)")
     Object doStringNonCompact(String input, int fromIndex, int index, int maxIndex) {
-        return executor.execute(executor.createLocals(input, fromIndex, index, maxIndex), false);
+        return executor.execute(executor.createLocals(input, fromIndex, index, maxIndex), TruffleString.CodeRange.BROKEN, false);
     }
 
-    @Specialization
-    Object doTruffleObject(TruffleObject input, int fromIndex, int index, int maxIndex,
+    @Specialization(guards = "codeRangeEqualsNode.execute(input, cachedCodeRange)", limit = "5")
+    Object doTString(TruffleString input, int fromIndex, int index, int maxIndex,
+                    @Cached @SuppressWarnings("unused") TruffleString.GetCodeRangeNode codeRangeNode,
+                    @Cached @SuppressWarnings("unused") TruffleString.CodeRangeEqualsNode codeRangeEqualsNode,
+                    @Cached("codeRangeNode.execute(input, executor.getEncoding().getTStringEncoding())") TruffleString.CodeRange cachedCodeRange) {
+        return executor.execute(executor.createLocals(input, fromIndex, index, maxIndex), cachedCodeRange, true);
+    }
+
+    @Specialization(guards = "neitherByteArrayNorString(input)")
+    Object doTruffleObject(Object input, int fromIndex, int index, int maxIndex,
                     @Cached("createClassProfile()") ValueProfile inputClassProfile) {
         // conservatively disable compact string optimizations.
         // TODO: maybe add an interface for TruffleObjects to announce if they are compact / ascii
         // strings?
-        return executor.execute(executor.createLocals(inputClassProfile.profile(input), fromIndex, index, maxIndex), false);
+        return executor.execute(executor.createLocals(inputClassProfile.profile(input), fromIndex, index, maxIndex), TruffleString.CodeRange.BROKEN, false);
     }
 
     static boolean isCompactString(String str) {
         return UNSAFE != null && UNSAFE.getByte(str, coderFieldOffset) == 0;
+    }
+
+    protected static boolean neitherByteArrayNorString(Object obj) {
+        return !(obj instanceof byte[]) && !(obj instanceof String) && !(obj instanceof TruffleString);
     }
 }

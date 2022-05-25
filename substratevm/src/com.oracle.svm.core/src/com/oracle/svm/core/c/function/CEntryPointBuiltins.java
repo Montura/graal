@@ -24,6 +24,11 @@
  */
 package com.oracle.svm.core.c.function;
 
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
 import org.graalvm.nativeimage.CurrentIsolate;
 import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.IsolateThread;
@@ -35,11 +40,6 @@ import com.oracle.svm.core.annotate.Uninterruptible;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoEpilogue;
 import com.oracle.svm.core.c.function.CEntryPointOptions.NoPrologue;
 import com.oracle.svm.core.c.function.CEntryPointOptions.Publish;
-
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
 
 /**
  * Methods implementing the built-ins of {@link Builtin}, which are matched by name
@@ -76,7 +76,7 @@ public final class CEntryPointBuiltins {
     @CEntryPointOptions(prologue = NoPrologue.class, epilogue = NoEpilogue.class, publishAs = Publish.NotPublished)
     @CEntryPointBuiltinImplementation(builtin = Builtin.ATTACH_THREAD)
     public static IsolateThread attachThread(Isolate isolate) {
-        int status = CEntryPointActions.enterAttachThread(isolate, true);
+        int status = CEntryPointActions.enterAttachThread(isolate, false, true);
         if (status != 0) {
             return WordFactory.nullPointer();
         }

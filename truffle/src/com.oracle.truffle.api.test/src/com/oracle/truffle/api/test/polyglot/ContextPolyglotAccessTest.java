@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -54,10 +54,10 @@ import java.util.Map;
 
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.PolyglotAccess;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CallTarget;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.Env;
 import com.oracle.truffle.api.TruffleLanguage.Registration;
@@ -67,6 +67,7 @@ import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.nodes.LanguageInfo;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.Source;
+import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
 
@@ -77,6 +78,11 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
     public static final String LANGUAGE3 = "ContextPolyglotAccessTestLanguage3";
 
     public static final String NOT_EXISTING_LANGUAGE = "$$$LanguageThatDoesNotExist$$$";
+
+    @BeforeClass
+    public static void runWithWeakEncapsulationOnly() {
+        TruffleTestAssumptions.assumeWeakEncapsulation();
+    }
 
     @Test
     public void testNull() {
@@ -91,7 +97,7 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
     public void testNotExistingDependent() {
         setupEnv(Context.newBuilder(ProxyLanguage.ID, LANGUAGE2).allowPolyglotAccess(PolyglotAccess.NONE).build());
         context.initialize(LANGUAGE2);
-        Env env2 = Language2.getContext(Language2.class);
+        Env env2 = Language2.getContext(LANGUAGE2);
         assertTrue(env2.getInternalLanguages().containsKey(LANGUAGE2));
         assertFalse(env2.getInternalLanguages().containsKey(NOT_EXISTING_LANGUAGE));
     }
@@ -101,10 +107,10 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         setupEnv(Context.newBuilder(ProxyLanguage.ID, DEPENDENT, LANGUAGE1).allowPolyglotAccess(PolyglotAccess.ALL).build());
         context.initialize(LANGUAGE1);
 
-        Env language1 = Language1.getContext(Language1.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
         language1.initializeLanguage(language1.getInternalLanguages().get(DEPENDENT));
 
-        Env dependent = Dependent.getContext(Dependent.class);
+        Env dependent = Dependent.getContext(DEPENDENT);
         assertPublicEvalDenied(language1, INTERNAL);
         assertPublicEvalAllowed(language1, DEPENDENT);
         assertPublicEvalAllowed(language1, LANGUAGE1);
@@ -136,7 +142,7 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         } catch (IllegalArgumentException e) {
             assertTrue(e.getMessage(), e.getMessage().startsWith("A language with id '" + NOT_EXISTING_LANGUAGE + "' is not installed."));
         }
-        Env env1 = Language1.getContext(Language1.class);
+        Env env1 = Language1.getContext(LANGUAGE1);
         assertTrue(env1.getInternalLanguages().containsKey(LANGUAGE1));
         assertFalse(env1.getInternalLanguages().containsKey(NOT_EXISTING_LANGUAGE));
     }
@@ -153,8 +159,8 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         } catch (IllegalArgumentException e) {
             assertEquals("Access to language '" + DEPENDENT + "' is not permitted. ", e.getMessage());
         }
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language2.getContext(Language2.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language2.getContext(LANGUAGE2);
 
         assertPublicEvalDenied(language1, INTERNAL);
         assertPublicEvalDenied(language1, DEPENDENT);
@@ -230,8 +236,8 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
     private void testNoAccessImpl() {
         context.initialize(LANGUAGE1);
         context.initialize(LANGUAGE2);
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language2.getContext(Language2.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language2.getContext(LANGUAGE2);
         assertTrue(language1.getInternalLanguages().containsKey(INTERNAL));
         assertTrue(language2.getInternalLanguages().containsKey(INTERNAL));
         assertLanguages(language1.getInternalLanguages(), LANGUAGE1, DEPENDENT);
@@ -310,7 +316,7 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         setupEnv();
         context.initialize(LANGUAGE1);
 
-        Env env1 = Language1.getContext(Language1.class);
+        Env env1 = Language1.getContext(LANGUAGE1);
 
         try {
             env1.exportSymbol("symbol", new Object());
@@ -350,8 +356,8 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         context.initialize(LANGUAGE1);
         context.initialize(LANGUAGE2);
 
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language2.getContext(Language2.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language2.getContext(LANGUAGE2);
 
         assertPublicEvalDenied(language1, INTERNAL);
         assertPublicEvalDenied(language1, DEPENDENT);
@@ -383,8 +389,8 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         context.initialize(LANGUAGE1);
         context.initialize(LANGUAGE2);
 
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language2.getContext(Language2.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language2.getContext(LANGUAGE2);
 
         assertPublicEvalDenied(language1, INTERNAL);
         assertPublicEvalDenied(language1, DEPENDENT);
@@ -417,8 +423,8 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         context.initialize(LANGUAGE1);
         context.initialize(LANGUAGE2);
 
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language2.getContext(Language2.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language2.getContext(LANGUAGE2);
 
         assertPublicEvalDenied(language1, INTERNAL);
         assertPublicEvalDenied(language1, DEPENDENT);
@@ -448,8 +454,8 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         context.initialize(LANGUAGE1);
         context.initialize(LANGUAGE2);
 
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language2.getContext(Language2.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language2.getContext(LANGUAGE2);
 
         assertPublicEvalDenied(language1, INTERNAL);
         assertPublicEvalDenied(language1, DEPENDENT);
@@ -483,9 +489,9 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         context.initialize(LANGUAGE2);
         context.initialize(LANGUAGE3);
 
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language2.getContext(Language2.class);
-        Env language3 = Language2.getContext(Language3.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language2.getContext(LANGUAGE2);
+        Env language3 = Language2.getContext(LANGUAGE3);
 
         assertPublicEvalDenied(language1, INTERNAL);
         assertPublicEvalDenied(language1, DEPENDENT);
@@ -535,9 +541,9 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         context.initialize(LANGUAGE2);
         context.initialize(LANGUAGE3);
 
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language2.getContext(Language2.class);
-        Env language3 = Language2.getContext(Language3.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language2.getContext(LANGUAGE2);
+        Env language3 = Language2.getContext(LANGUAGE3);
 
         assertPublicEvalDenied(language1, INTERNAL);
         assertPublicEvalDenied(language1, DEPENDENT);
@@ -586,8 +592,8 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         context.initialize(LANGUAGE1);
         context.initialize(LANGUAGE2);
 
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language2.getContext(Language2.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language2.getContext(LANGUAGE2);
 
         assertPublicEvalDenied(language1, INTERNAL);
         assertPublicEvalDenied(language1, DEPENDENT);
@@ -657,8 +663,8 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         context.initialize(LANGUAGE1);
         context.initialize(LANGUAGE2);
 
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language2.getContext(Language2.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language2.getContext(LANGUAGE2);
 
         assertBindingsAllowed(language1);
         assertBindingsNotAccessible(language2);
@@ -671,8 +677,8 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         context.initialize(LANGUAGE1);
         context.initialize(LANGUAGE2);
 
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language2.getContext(Language2.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language2.getContext(LANGUAGE2);
 
         assertBindingsAllowed(language1);
         assertBindingsAllowed(language2);
@@ -685,8 +691,8 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         context.initialize(LANGUAGE1);
         context.initialize(LANGUAGE2);
 
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language2.getContext(Language2.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language2.getContext(LANGUAGE2);
 
         assertBindingsNotAccessible(language1);
         assertBindingsNotAccessible(language2);
@@ -697,7 +703,7 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         setupEnv();
         context.initialize(LANGUAGE1);
 
-        Env language1 = Language1.getContext(Language1.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
 
         assertPublicEvalDenied(language1, INTERNAL);
         assertPublicEvalAllowed(language1, DEPENDENT);
@@ -715,7 +721,7 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         setupEnv(Context.newBuilder().allowPolyglotAccess(PolyglotAccess.NONE).build());
         context.initialize(LANGUAGE1);
 
-        Env language1 = Language1.getContext(Language1.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
 
         assertPublicEvalDenied(language1, INTERNAL);
         assertPublicEvalDenied(language1, DEPENDENT);
@@ -734,8 +740,8 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
         context.initialize(LANGUAGE1);
         context.initialize(LANGUAGE2);
 
-        Env language1 = Language1.getContext(Language1.class);
-        Env language2 = Language1.getContext(Language2.class);
+        Env language1 = Language1.getContext(LANGUAGE1);
+        Env language2 = Language1.getContext(LANGUAGE2);
 
         assertPublicEvalDenied(language1, INTERNAL);
         assertPublicEvalDenied(language1, DEPENDENT);
@@ -819,32 +825,57 @@ public class ContextPolyglotAccessTest extends AbstractPolyglotTest {
 
         @Override
         protected CallTarget parse(ParsingRequest request) throws Exception {
-            return Truffle.getRuntime().createCallTarget(RootNode.createConstantNode(true));
+            return RootNode.createConstantNode(true).getCallTarget();
         }
 
-        public static <T extends TruffleLanguage<C>, C> C getContext(Class<T> language) {
-            return getCurrentContext(language);
+        public static Env getContext(String language) {
+            ContextReference<Env> ref;
+            switch (language) {
+                case LANGUAGE1:
+                    ref = REFERENCE;
+                    break;
+                case LANGUAGE2:
+                    ref = Language2.REFERENCE;
+                    break;
+                case DEPENDENT:
+                    ref = Dependent.REFERENCE;
+                    break;
+                case INTERNAL:
+                    ref = Internal.REFERENCE;
+                    break;
+                case LANGUAGE3:
+                    ref = Language3.REFERENCE;
+                    break;
+                default:
+                    throw new AssertionError();
+
+            }
+            return ref.get(null);
         }
 
-        public static <T extends TruffleLanguage<?>> T getLanguage(Class<T> language) {
-            return getCurrentLanguage(language);
-        }
+        static final ContextReference<Env> REFERENCE = ContextReference.create(Language1.class);
+
     }
 
     @Registration(id = LANGUAGE2, name = LANGUAGE2, dependentLanguages = NOT_EXISTING_LANGUAGE)
     public static class Language2 extends Language1 {
+
+        static final ContextReference<Env> REFERENCE = ContextReference.create(Language2.class);
     }
 
     @Registration(id = DEPENDENT, name = DEPENDENT)
     public static class Dependent extends Language1 {
+        static final ContextReference<Env> REFERENCE = ContextReference.create(Dependent.class);
     }
 
     @Registration(id = INTERNAL, name = INTERNAL, internal = true)
     public static class Internal extends Language1 {
+        static final ContextReference<Env> REFERENCE = ContextReference.create(Internal.class);
     }
 
     @Registration(id = LANGUAGE3, name = LANGUAGE3)
     public static class Language3 extends Language1 {
+        static final ContextReference<Env> REFERENCE = ContextReference.create(Language3.class);
     }
 
 }

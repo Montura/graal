@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,30 +28,18 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 
-import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.struct.SizeOf;
-import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.word.Pointer;
 
 import com.oracle.svm.core.CPUFeatureAccess;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
-import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.util.VMError;
 
 import jdk.vm.ci.aarch64.AArch64;
 import jdk.vm.ci.code.Architecture;
-
-@AutomaticFeature
-@Platforms(Platform.AARCH64.class)
-class AArch64CPUFeatureAccessFeature implements Feature {
-    @Override
-    public void afterRegistration(AfterRegistrationAccess access) {
-        ImageSingletons.add(CPUFeatureAccess.class, new AArch64CPUFeatureAccess());
-    }
-}
 
 public class AArch64CPUFeatureAccess implements CPUFeatureAccess {
 
@@ -68,7 +56,7 @@ public class AArch64CPUFeatureAccess implements CPUFeatureAccess {
      * Because the CPUFeatures available vary across different JDK versions, the features are
      * queried via their name, as opposed to the actual enum.
      */
-    private static boolean isFeaturePresent(String featureName, AArch64LibCHelper.CPUFeatures cpuFeatures) {
+    private static boolean isFeaturePresent(String featureName, AArch64LibCHelper.CPUFeatures cpuFeatures, List<String> unknownFeatures) {
         switch (featureName) {
             case "FP":
                 return cpuFeatures.fFP();
@@ -88,6 +76,16 @@ public class AArch64CPUFeatureAccess implements CPUFeatureAccess {
                 return cpuFeatures.fCRC32();
             case "LSE":
                 return cpuFeatures.fLSE();
+            case "DCPOP":
+                return cpuFeatures.fDCPOP();
+            case "SHA3":
+                return cpuFeatures.fSHA3();
+            case "SHA512":
+                return cpuFeatures.fSHA512();
+            case "SVE":
+                return cpuFeatures.fSVE();
+            case "SVE2":
+                return cpuFeatures.fSVE2();
             case "STXR_PREFETCH":
                 return cpuFeatures.fSTXRPREFETCH();
             case "A53MAC":
@@ -95,12 +93,14 @@ public class AArch64CPUFeatureAccess implements CPUFeatureAccess {
             case "DMB_ATOMICS":
                 return cpuFeatures.fDMBATOMICS();
             default:
-                throw VMError.shouldNotReachHere("Missing feature check: " + featureName);
+                unknownFeatures.add(featureName);
+                return false;
         }
     }
 
+    @Override
     @Platforms(Platform.AARCH64.class)
-    public static EnumSet<AArch64.CPUFeature> determineHostCPUFeatures() {
+    public EnumSet<AArch64.CPUFeature> determineHostCPUFeatures() {
         EnumSet<AArch64.CPUFeature> features = EnumSet.noneOf(AArch64.CPUFeature.class);
 
         AArch64LibCHelper.CPUFeatures cpuFeatures = StackValue.get(AArch64LibCHelper.CPUFeatures.class);
@@ -109,10 +109,14 @@ public class AArch64CPUFeatureAccess implements CPUFeatureAccess {
 
         AArch64LibCHelper.determineCPUFeatures(cpuFeatures);
 
+        ArrayList<String> unknownFeatures = new ArrayList<>();
         for (AArch64.CPUFeature feature : AArch64.CPUFeature.values()) {
-            if (isFeaturePresent(feature.name(), cpuFeatures)) {
+            if (isFeaturePresent(feature.name(), cpuFeatures, unknownFeatures)) {
                 features.add(feature);
             }
+        }
+        if (!unknownFeatures.isEmpty()) {
+            throw VMError.shouldNotReachHere("Native image does not support the following JVMCI CPU features: " + unknownFeatures);
         }
 
         return features;

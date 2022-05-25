@@ -27,21 +27,19 @@ package com.oracle.svm.methodhandles;
 import static com.oracle.svm.core.util.VMError.shouldNotReachHere;
 
 import java.lang.invoke.MethodType;
-// Checkstyle: stop
+import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-// Checkstyle: allow
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.hub.DynamicHub;
 import com.oracle.svm.core.invoke.MethodHandleIntrinsic;
-import com.oracle.svm.core.invoke.MethodHandleUtils.MethodHandlesSupported;
 import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
 
 import jdk.vm.ci.meta.JavaKind;
@@ -109,7 +107,7 @@ final class MethodHandleIntrinsicImpl implements MethodHandleIntrinsic {
         }
     }
 
-    static Map<Variant, Map<String, Map<JavaKind, Map<Integer, MethodHandleIntrinsicImpl>>>> cache = new HashMap<>();
+    static Map<Variant, Map<String, Map<JavaKind, Map<Integer, MethodHandleIntrinsicImpl>>>> cache = new ConcurrentHashMap<>();
     static final String NO_SPECIES = "";
     static final Set<String> unsafeFieldAccessMethodNames = new HashSet<>();
 
@@ -136,9 +134,9 @@ final class MethodHandleIntrinsicImpl implements MethodHandleIntrinsic {
     }
 
     private static MethodHandleIntrinsicImpl intrinsic(Variant variant, String species, JavaKind kind, int index) {
-        return cache.computeIfAbsent(variant, (v) -> new HashMap<>())
-                        .computeIfAbsent(species, (s) -> new HashMap<>())
-                        .computeIfAbsent(kind, (t) -> new HashMap<>())
+        return cache.computeIfAbsent(variant, (v) -> new ConcurrentHashMap<>())
+                        .computeIfAbsent(species, (s) -> new ConcurrentHashMap<>())
+                        .computeIfAbsent(kind, (t) -> new ConcurrentHashMap<>())
                         .computeIfAbsent(index, (i) -> new MethodHandleIntrinsicImpl(variant, species, kind, index));
     }
 
@@ -255,8 +253,17 @@ final class MethodHandleIntrinsicImpl implements MethodHandleIntrinsic {
                 if (args[0] instanceof Target_java_lang_invoke_MethodHandleImpl_IntrinsicMethodHandle) {
                     mh = (SubstrateUtil.cast(args[0], Target_java_lang_invoke_MethodHandleImpl_IntrinsicMethodHandle.class).getTarget());
                 }
-                Target_java_lang_invoke_SimpleMethodHandle bmh = SubstrateUtil.cast(mh, Target_java_lang_invoke_SimpleMethodHandle.class);
-                return bmh.args[index];
+
+                if (Target_java_lang_invoke_SimpleMethodHandle.class.isAssignableFrom(mh.getClass())) {
+                    Target_java_lang_invoke_SimpleMethodHandle bmh = SubstrateUtil.cast(mh, Target_java_lang_invoke_SimpleMethodHandle.class);
+                    return bmh.args[index];
+                } else {
+                    char kindChar = kind == JavaKind.Object ? 'L' : kind.getTypeChar();
+                    String argName = "arg" + kindChar + index;
+                    Field argField = mh.getClass().getDeclaredField(argName);
+                    argField.setAccessible(true);
+                    return argField.get(mh);
+                }
             }
 
             /* java.lang.invoke.MethodHandleImpl helper functions */
@@ -542,7 +549,7 @@ final class MethodHandleIntrinsicImpl implements MethodHandleIntrinsic {
     }
 }
 
-@TargetClass(className = "java.lang.invoke.MethodHandleImpl", innerClass = "IntrinsicMethodHandle", onlyWith = MethodHandlesSupported.class)
+@TargetClass(className = "java.lang.invoke.MethodHandleImpl", innerClass = "IntrinsicMethodHandle")
 final class Target_java_lang_invoke_MethodHandleImpl_IntrinsicMethodHandle {
     @Alias
     protected native Target_java_lang_invoke_MethodHandle getTarget();

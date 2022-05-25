@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -45,6 +45,7 @@ import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Map;
 
+import com.oracle.truffle.api.ArrayUtils;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.regex.RegexFlags;
 import com.oracle.truffle.regex.RegexSource;
@@ -114,7 +115,7 @@ public final class RegexLexer {
      *            {@link RegexSource#getPattern()}.
      */
     private void setSourceSection(Token t, int startIndex, int endIndex) {
-        if (source.getOptions().isDumpAutomata()) {
+        if (source.getOptions().isDumpAutomataWithSourceSections()) {
             // RegexSource#getSource() prepends a slash ('/') to the pattern, so we have to add an
             // offset of 1 here.
             t.setSourceSection(source.getSource().createSection(startIndex + 1, endIndex - startIndex));
@@ -131,6 +132,19 @@ public final class RegexLexer {
         final char c = pattern.charAt(index);
         advance();
         return c;
+    }
+
+    private boolean findChars(char... chars) {
+        if (atEnd()) {
+            return false;
+        }
+        int i = ArrayUtils.indexOf(pattern, index, pattern.length(), chars);
+        if (i < 0) {
+            index = pattern.length();
+            return false;
+        }
+        index = i;
+        return true;
     }
 
     private void advance() {
@@ -216,7 +230,7 @@ public final class RegexLexer {
         // which might turn into a non-capturing group or a look-around assertion.
         boolean insideCharClass = false;
         final int restoreIndex = index;
-        while (!atEnd()) {
+        while (findChars('\\', '[', ']', '(')) {
             switch (consumeChar()) {
                 case '\\':
                     // skip escaped char
@@ -234,7 +248,7 @@ public final class RegexLexer {
                     }
                     break;
                 default:
-                    break;
+                    throw CompilerDirectives.shouldNotReachHere();
             }
         }
         index = restoreIndex;
@@ -266,12 +280,8 @@ public final class RegexLexer {
             CaseFoldTable.CaseFoldingAlgorithm caseFolding = flags.isUnicode() ? CaseFoldTable.CaseFoldingAlgorithm.ECMAScriptUnicode : CaseFoldTable.CaseFoldingAlgorithm.ECMAScriptNonUnicode;
             CaseFoldTable.applyCaseFold(curCharClass, charClassCaseFoldTmp, caseFolding);
         }
-        CodePointSet cps = pruneCharClass(curCharClass.toCodePointSet());
+        CodePointSet cps = curCharClass.toCodePointSet();
         return Token.createCharClass(invert ? cps.createInverse(encoding) : cps, wasSingleChar);
-    }
-
-    private CodePointSet pruneCharClass(CodePointSet cps) {
-        return encoding.getFullSet().createIntersection(cps, curCharClass.getTmp());
     }
 
     /* lexer */
@@ -280,7 +290,7 @@ public final class RegexLexer {
         final char c = consumeChar();
         switch (c) {
             case '.':
-                return Token.createCharClass(pruneCharClass(flags.isDotAll() ? Constants.DOT_ALL : Constants.DOT));
+                return Token.createCharClass(flags.isDotAll() ? Constants.DOT_ALL : Constants.DOT);
             case '^':
                 return Token.createCaret();
             case '$':
@@ -371,7 +381,7 @@ public final class RegexLexer {
                 // the case-folding step in the `charClass` method and call `Token::createCharClass`
                 // directly.
                 if (isPredefCharClass(c)) {
-                    return Token.createCharClass(pruneCharClass(parsePredefCharClass(c)));
+                    return Token.createCharClass(parsePredefCharClass(c));
                 } else if (flags.isUnicode() && (c == 'p' || c == 'P')) {
                     return charClass(parseUnicodeCharacterProperty(c == 'P'));
                 } else {

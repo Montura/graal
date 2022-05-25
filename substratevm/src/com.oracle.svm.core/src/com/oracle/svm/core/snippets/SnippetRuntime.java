@@ -26,12 +26,9 @@ package com.oracle.svm.core.snippets;
 
 import static com.oracle.svm.core.graal.snippets.SubstrateAllocationSnippets.TLAB_LOCATIONS;
 
-//Checkstyle: allow reflection
-
 import java.lang.reflect.Method;
 
 import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
-import org.graalvm.compiler.phases.util.Providers;
 import org.graalvm.compiler.replacements.nodes.BinaryMathIntrinsicNode.BinaryOperation;
 import org.graalvm.compiler.replacements.nodes.UnaryMathIntrinsicNode.UnaryOperation;
 import org.graalvm.util.DirectAnnotationAccess;
@@ -67,9 +64,9 @@ public class SnippetRuntime {
     private static final SubstrateForeignCallDescriptor[] FOREIGN_CALLS = new SubstrateForeignCallDescriptor[]{UNSUPPORTED_FEATURE, REGISTER_FINALIZER, ARITHMETIC_SIN, ARITHMETIC_COS, ARITHMETIC_TAN,
                     ARITHMETIC_LOG, ARITHMETIC_LOG10, ARITHMETIC_EXP, ARITHMETIC_POW};
 
-    public static void registerForeignCalls(Providers providers, SubstrateForeignCallsProvider foreignCalls) {
-        SubstrateAllocationSnippets.registerForeignCalls(providers, foreignCalls);
-        foreignCalls.register(providers, FOREIGN_CALLS);
+    public static void registerForeignCalls(SubstrateForeignCallsProvider foreignCalls) {
+        SubstrateAllocationSnippets.registerForeignCalls(foreignCalls);
+        foreignCalls.register(FOREIGN_CALLS);
     }
 
     public static SubstrateForeignCallDescriptor findForeignCall(Class<?> declaringClass, String methodName, boolean isReexecutable, LocationIdentity... additionalKilledLocations) {
@@ -82,7 +79,7 @@ public class SnippetRuntime {
         SubstrateForeignCallTarget foreignCallTargetAnnotation = DirectAnnotationAccess.getAnnotation(method, SubstrateForeignCallTarget.class);
         VMError.guarantee(foreignCallTargetAnnotation != null, "Add missing @SubstrateForeignCallTarget to " + declaringClass.getName() + "." + methodName);
 
-        boolean isUninterruptible = DirectAnnotationAccess.isAnnotationPresent(method, Uninterruptible.class);
+        boolean isUninterruptible = Uninterruptible.Utils.isUninterruptible(method);
         boolean isFullyUninterruptible = foreignCallTargetAnnotation.fullyUninterruptible();
         return findForeignCall(descriptorName, method, isReexecutable, isUninterruptible, isFullyUninterruptible, additionalKilledLocations);
     }

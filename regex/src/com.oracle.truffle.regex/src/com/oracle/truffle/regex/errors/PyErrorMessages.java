@@ -89,12 +89,12 @@ public interface PyErrorMessages {
 
     @TruffleBoundary
     static String incompleteEscapeU(char chr, String code) {
-        return "bad escape \\" + chr + code;
+        return "incomplete escape \\" + chr + code;
     }
 
     @TruffleBoundary
     static String incompleteEscapeX(String code) {
-        return "bad escape \\x" + code;
+        return "incomplete escape \\x" + code;
     }
 
     @TruffleBoundary
@@ -109,12 +109,27 @@ public interface PyErrorMessages {
 
     @TruffleBoundary
     static String invalidUnicodeEscape(char chr, String code) {
-        return "unicode escape value \\" + chr + code + " outside of range 0-0x10FFFF";
+        return "bad escape \\" + chr + code;
+    }
+
+    @TruffleBoundary
+    static String missing(String name) {
+        return "missing " + name;
+    }
+
+    @TruffleBoundary
+    static String missingUnterminatedName(char terminator) {
+        return "missing " + terminator + ", unterminated name";
     }
 
     @TruffleBoundary
     static String redefinitionOfGroupName(String name, int newId, int oldId) {
         return String.format("redefinition of group name '%s' as group %d; was group %d", name, newId, oldId);
+    }
+
+    @TruffleBoundary
+    static String undefinedCharacterName(String name) {
+        return "undefined character name '" + name + "'";
     }
 
     @TruffleBoundary

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,7 +32,6 @@ import java.net.InetAddress;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.nio.file.StandardOpenOption;
 import java.security.Permission;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -63,20 +62,23 @@ import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.polyglot.io.FileSystem;
 
 import com.oracle.graal.pointsto.BigBang;
-import com.oracle.graal.pointsto.flow.InvokeTypeFlow;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
+import com.oracle.graal.pointsto.meta.InvokeInfo;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.option.LocatableMultiOptionValue;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.ImageClassLoader;
 import com.oracle.svm.hosted.SVMHost;
 import com.oracle.svm.hosted.config.ConfigurationParserUtils;
+import com.oracle.svm.util.ClassUtil;
 
+import jdk.vm.ci.common.JVMCIError;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
 import jdk.vm.ci.meta.ResolvedJavaType;
 
@@ -130,6 +132,7 @@ public class PermissionsFeature implements Feature {
         compilerPackages.add("com.oracle.graalvm.");
         compilerPackages.add("com.oracle.truffle.api.");
         compilerPackages.add("com.oracle.truffle.polyglot.");
+        compilerPackages.add("com.oracle.truffle.host.");
         compilerPackages.add("com.oracle.truffle.nfi.");
         compilerPackages.add("com.oracle.truffle.object.");
     }
@@ -152,14 +155,14 @@ public class PermissionsFeature implements Feature {
     private Set<AnalysisMethod> whiteList;
 
     /**
-     * Marker interface for SVM generated accessor classes which are opaque for permission analysis.
+     * Classes for reflective accesses which are opaque for permission analysis.
      */
-    private AnalysisType reflectionProxy;
+    private AnalysisType reflectionFieldAccessorFactory;
 
     @Override
     public void duringSetup(DuringSetupAccess access) {
         if (SubstrateOptions.FoldSecurityManagerGetter.getValue()) {
-            UserError.abort("%s requires -H:-FoldSecurityManagerGetter option.", getClass().getSimpleName());
+            UserError.abort("%s requires -H:-FoldSecurityManagerGetter option.", ClassUtil.getUnqualifiedName(getClass()));
         }
         String reportFile = Options.TruffleTCKPermissionsReportFile.getValue();
         if (reportFile == null) {
@@ -175,42 +178,38 @@ public class PermissionsFeature implements Feature {
     @SuppressWarnings("try")
     public void afterAnalysis(AfterAnalysisAccess access) {
         try {
-            if (Files.exists(reportFilePath) && Files.size(reportFilePath) > 0) {
-                Files.newOutputStream(reportFilePath, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
-            }
+            Files.deleteIfExists(reportFilePath);
         } catch (IOException ioe) {
             throw UserError.abort("Cannot delete existing report file %s.", reportFilePath);
         }
         FeatureImpl.AfterAnalysisAccessImpl accessImpl = (FeatureImpl.AfterAnalysisAccessImpl) access;
         DebugContext debugContext = accessImpl.getDebugContext();
-        try (DebugContext.Scope s = debugContext.scope(getClass().getSimpleName())) {
-            BigBang bigbang = accessImpl.getBigBang();
-            WhiteListParser parser = new WhiteListParser(accessImpl.getImageClassLoader(), bigbang);
+        try (DebugContext.Scope s = debugContext.scope(ClassUtil.getUnqualifiedName(getClass()))) {
+            BigBang bb = accessImpl.getBigBang();
+            WhiteListParser parser = new WhiteListParser(accessImpl.getImageClassLoader(), bb);
             ConfigurationParserUtils.parseAndRegisterConfigurations(parser,
                             accessImpl.getImageClassLoader(),
-                            getClass().getSimpleName(),
+                            ClassUtil.getUnqualifiedName(getClass()),
                             Options.TruffleTCKPermissionsExcludeFiles,
                             new ResourceAsOptionDecorator(getClass().getPackage().getName().replace('.', '/') + "/resources/jre.json"),
                             CONFIG);
-            reflectionProxy = bigbang.forClass("com.oracle.svm.reflect.helpers.ReflectionProxy");
-            if (reflectionProxy == null) {
-                UserError.abort("Cannot load ReflectionProxy type");
-            }
+            reflectionFieldAccessorFactory = bb.getMetaAccess().lookupJavaType(loadClassOrFail("jdk.internal.reflect.UnsafeFieldAccessorFactory"));
+            VMError.guarantee(reflectionFieldAccessorFactory != null, "Cannot load one or several reflection types");
             whiteList = parser.getLoadedWhiteList();
             Set<AnalysisMethod> deniedMethods = new HashSet<>();
-            deniedMethods.addAll(findMethods(bigbang, SecurityManager.class, (m) -> m.getName().startsWith("check")));
-            deniedMethods.addAll(findMethods(bigbang, sun.misc.Unsafe.class, (m) -> m.isPublic()));
+            deniedMethods.addAll(findMethods(bb, SecurityManager.class, (m) -> m.getName().startsWith("check")));
+            deniedMethods.addAll(findMethods(bb, sun.misc.Unsafe.class, (m) -> m.isPublic()));
             // The type of the host Java NIO FileSystem.
             // The FileSystem obtained from the FileSystem.newDefaultFileSystem() is in the Truffle
             // package but
             // can be directly used by a language. We need to include it into deniedMethods.
-            deniedMethods.addAll(findMethods(bigbang, FileSystem.newDefaultFileSystem().getClass(), (m) -> m.isPublic()));
+            deniedMethods.addAll(findMethods(bb, FileSystem.newDefaultFileSystem().getClass(), (m) -> m.isPublic()));
             if (!deniedMethods.isEmpty()) {
-                Map<AnalysisMethod, Set<AnalysisMethod>> cg = callGraph(bigbang, deniedMethods, debugContext);
+                Map<AnalysisMethod, Set<AnalysisMethod>> cg = callGraph(bb, deniedMethods, debugContext);
                 List<List<AnalysisMethod>> report = new ArrayList<>();
                 Set<CallGraphFilter> contextFilters = new HashSet<>();
-                Collections.addAll(contextFilters, new SafeInterruptRecognizer(bigbang), new SafePrivilegedRecognizer(bigbang),
-                                new SafeServiceLoaderRecognizer(bigbang, accessImpl.getImageClassLoader()));
+                Collections.addAll(contextFilters, new SafeInterruptRecognizer(bb), new SafePrivilegedRecognizer(bb),
+                                new SafeServiceLoaderRecognizer(bb, accessImpl.getImageClassLoader()));
                 int maxStackDepth = Options.TruffleTCKPermissionsMaxStackTraceDepth.getValue();
                 maxStackDepth = maxStackDepth == -1 ? Integer.MAX_VALUE : maxStackDepth;
                 for (AnalysisMethod deniedMethod : deniedMethods) {
@@ -241,22 +240,30 @@ public class PermissionsFeature implements Feature {
         }
     }
 
+    private static Class<?> loadClassOrFail(String className) {
+        try {
+            return Class.forName(className);
+        } catch (ClassNotFoundException e) {
+            throw JVMCIError.shouldNotReachHere(e);
+        }
+    }
+
     /**
      * Creates an inverted call graph for methods given by {@code targets} parameter. For each
      * called method in {@code targets} or transitive caller of {@code targets} the resulting
      * {@code Map} contains an entry holding all direct callers of the method in the entry value.
      *
-     * @param bigbang the {@link BigBang}
+     * @param bb the {@link BigBang}
      * @param targets the target methods to build call graph for
      * @param debugContext the {@link DebugContext}
      */
     private Map<AnalysisMethod, Set<AnalysisMethod>> callGraph(
-                    BigBang bigbang,
+                    BigBang bb,
                     Set<AnalysisMethod> targets,
                     DebugContext debugContext) {
         Deque<AnalysisMethod> todo = new LinkedList<>();
         Map<AnalysisMethod, Set<AnalysisMethod>> visited = new HashMap<>();
-        for (AnalysisMethod m : bigbang.getUniverse().getMethods()) {
+        for (AnalysisMethod m : bb.getUniverse().getMethods()) {
             if (m.isEntryPoint()) {
                 visited.put(m, new HashSet<>());
                 todo.offer(m);
@@ -280,32 +287,34 @@ public class PermissionsFeature implements Feature {
         try {
             boolean callPathContainsTarget = false;
             debugContext.log(DebugContext.VERY_DETAILED_LEVEL, "Entered method: %s.", mName);
-            for (InvokeTypeFlow invoke : m.getTypeFlow().getInvokes()) {
+            for (InvokeInfo invoke : m.getInvokes()) {
                 for (AnalysisMethod callee : invoke.getCallees()) {
-                    Set<AnalysisMethod> parents = visited.get(callee);
-                    String calleeName = getMethodName(callee);
-                    debugContext.log(DebugContext.VERY_DETAILED_LEVEL, "Callee: %s, new: %b.", calleeName, parents == null);
-                    if (parents == null) {
-                        parents = new HashSet<>();
-                        visited.put(callee, parents);
-                        if (targets.contains(callee)) {
+                    if (callee.isInvoked()) {
+                        Set<AnalysisMethod> parents = visited.get(callee);
+                        String calleeName = getMethodName(callee);
+                        debugContext.log(DebugContext.VERY_DETAILED_LEVEL, "Callee: %s, new: %b.", calleeName, parents == null);
+                        if (parents == null) {
+                            parents = new HashSet<>();
+                            visited.put(callee, parents);
+                            if (targets.contains(callee)) {
+                                parents.add(m);
+                                callPathContainsTarget = true;
+                                continue;
+                            }
+                            boolean add = callGraphImpl(callee, targets, visited, path, debugContext);
+                            if (add) {
+                                parents.add(m);
+                                debugContext.log(DebugContext.VERY_DETAILED_LEVEL, "Added callee: %s for %s.", calleeName, mName);
+                            }
+                            callPathContainsTarget |= add;
+                        } else if (!isBacktrace(callee, path) || isBackTraceOverLanguageMethod(callee, path)) {
                             parents.add(m);
+                            debugContext.log(DebugContext.VERY_DETAILED_LEVEL, "Added backtrace callee: %s for %s.", calleeName, mName);
                             callPathContainsTarget = true;
-                            continue;
-                        }
-                        boolean add = callGraphImpl(callee, targets, visited, path, debugContext);
-                        if (add) {
-                            parents.add(m);
-                            debugContext.log(DebugContext.VERY_DETAILED_LEVEL, "Added callee: %s for %s.", calleeName, mName);
-                        }
-                        callPathContainsTarget |= add;
-                    } else if (!isBacktrace(callee, path) || isBackTraceOverLanguageMethod(callee, path)) {
-                        parents.add(m);
-                        debugContext.log(DebugContext.VERY_DETAILED_LEVEL, "Added backtrace callee: %s for %s.", calleeName, mName);
-                        callPathContainsTarget = true;
-                    } else {
-                        if (debugContext.isLogEnabled(DebugContext.VERY_DETAILED_LEVEL)) {
-                            debugContext.log(DebugContext.VERY_DETAILED_LEVEL, "Ignoring backtrace callee: %s for %s.", calleeName, mName);
+                        } else {
+                            if (debugContext.isLogEnabled(DebugContext.VERY_DETAILED_LEVEL)) {
+                                debugContext.log(DebugContext.VERY_DETAILED_LEVEL, "Ignoring backtrace callee: %s for %s.", calleeName, mName);
+                            }
                         }
                     }
                 }
@@ -367,7 +376,7 @@ public class PermissionsFeature implements Feature {
      * @param maxDepth maximal call trace depth
      * @param maxReports maximal number of reports
      * @param callGraph call graph obtained from
-     *            {@link PermissionsFeature#callGraph(com.oracle.graal.pointsto.BigBang, java.util.Set, org.graalvm.compiler.debug.DebugContext)}
+     *            {@link PermissionsFeature#callGraph(BigBang, java.util.Set, org.graalvm.compiler.debug.DebugContext)}
      * @param contextFilters filters removing known valid calls
      * @param visited visited methods
      * @param depth current depth
@@ -404,14 +413,14 @@ public class PermissionsFeature implements Feature {
                     if (!callers.isEmpty()) {
                         useNoReports = collectViolations(report, callers.iterator().next(), maxDepth, maxReports, callGraph, contextFilters, visited, depth + 1, useNoReports);
                     }
-                } else if (!isSystemClass(m) && !isReflectionProxy(m)) {
+                } else if (!isSystemClass(m)) {
                     List<AnalysisMethod> callPath = new ArrayList<>(visited);
                     report.add(callPath);
                     useNoReports++;
                 } else {
                     nextCaller: for (AnalysisMethod caller : callers) {
                         for (CallGraphFilter filter : contextFilters) {
-                            if (filter.test(m, caller, visited)) {
+                            if (isReflectionFieldAccessorFactory(caller) || filter.test(m, caller, visited)) {
                                 continue nextCaller;
                             }
                         }
@@ -426,17 +435,10 @@ public class PermissionsFeature implements Feature {
     }
 
     /**
-     * Tests if the given {@link AnalysisMethod} comes from {@code ReflectionProxy} implementation.
-     *
-     * @param method the {@link AnalysisMethod} to check
+     * Tests if the given {@link AnalysisMethod} is part of the factory of field accessors.
      */
-    private boolean isReflectionProxy(AnalysisMethod method) {
-        for (AnalysisType iface : method.getDeclaringClass().getInterfaces()) {
-            if (iface.equals(reflectionProxy)) {
-                return true;
-            }
-        }
-        return false;
+    private boolean isReflectionFieldAccessorFactory(AnalysisMethod method) {
+        return reflectionFieldAccessorFactory.isAssignableFrom(method.getDeclaringClass());
     }
 
     /**
@@ -490,50 +492,50 @@ public class PermissionsFeature implements Feature {
     /**
      * Finds methods declared in {@code owner} class using {@code filter} predicate.
      *
-     * @param bigBang the {@link BigBang}
+     * @param bb the {@link BigBang}
      * @param owner the class which methods should be listed
      * @param filter the predicate filtering methods declared in {@code owner}
      * @return the methods accepted by {@code filter}
      * @throws IllegalStateException if owner cannot be resolved
      */
-    private static Set<AnalysisMethod> findMethods(BigBang bigBang, Class<?> owner, Predicate<ResolvedJavaMethod> filter) {
-        AnalysisType clazz = bigBang.forClass(owner);
+    private static Set<AnalysisMethod> findMethods(BigBang bb, Class<?> owner, Predicate<ResolvedJavaMethod> filter) {
+        AnalysisType clazz = bb.getMetaAccess().lookupJavaType(owner);
         if (clazz == null) {
             throw new IllegalStateException("Cannot resolve " + owner.getName() + ".");
         }
-        return findMethods(bigBang, clazz, filter);
+        return findMethods(bb, clazz, filter);
     }
 
     /**
      * Finds methods declared in {@code owner} {@link AnalysisType} using {@code filter} predicate.
      *
-     * @param bigBang the {@link BigBang}
+     * @param bb the {@link BigBang}
      * @param owner the {@link AnalysisType} which methods should be listed
      * @param filter the predicate filtering methods declared in {@code owner}
      * @return the methods accepted by {@code filter}
      */
-    static Set<AnalysisMethod> findMethods(BigBang bigBang, AnalysisType owner, Predicate<ResolvedJavaMethod> filter) {
-        return findImpl(bigBang, owner.getWrappedWithoutResolve().getDeclaredMethods(), filter);
+    static Set<AnalysisMethod> findMethods(BigBang bb, AnalysisType owner, Predicate<ResolvedJavaMethod> filter) {
+        return findImpl(bb, owner.getWrappedWithoutResolve().getDeclaredMethods(), filter);
     }
 
     /**
      * Finds constructors declared in {@code owner} {@link AnalysisType} using {@code filter}
      * predicate.
      *
-     * @param bigBang the {@link BigBang}
+     * @param bb the {@link BigBang}
      * @param owner the {@link AnalysisType} which constructors should be listed
      * @param filter the predicate filtering constructors declared in {@code owner}
      * @return the constructors accepted by {@code filter}
      */
-    static Set<AnalysisMethod> findConstructors(BigBang bigBang, AnalysisType owner, Predicate<ResolvedJavaMethod> filter) {
-        return findImpl(bigBang, owner.getWrappedWithoutResolve().getDeclaredConstructors(), filter);
+    static Set<AnalysisMethod> findConstructors(BigBang bb, AnalysisType owner, Predicate<ResolvedJavaMethod> filter) {
+        return findImpl(bb, owner.getWrappedWithoutResolve().getDeclaredConstructors(), filter);
     }
 
-    private static Set<AnalysisMethod> findImpl(BigBang bigBang, ResolvedJavaMethod[] methods, Predicate<ResolvedJavaMethod> filter) {
+    private static Set<AnalysisMethod> findImpl(BigBang bb, ResolvedJavaMethod[] methods, Predicate<ResolvedJavaMethod> filter) {
         Set<AnalysisMethod> result = new HashSet<>();
         for (ResolvedJavaMethod m : methods) {
             if (filter.test(m)) {
-                result.add(bigBang.getUniverse().lookup(m));
+                result.add(bb.getUniverse().lookup(m));
             }
         }
         return result;
@@ -573,15 +575,15 @@ public class PermissionsFeature implements Feature {
         private final ResolvedJavaMethod threadInterrupt;
         private final ResolvedJavaMethod threadCurrentThread;
 
-        SafeInterruptRecognizer(BigBang bigBang) {
-            this.hostVM = (SVMHost) bigBang.getHostVM();
+        SafeInterruptRecognizer(BigBang bb) {
+            this.hostVM = (SVMHost) bb.getHostVM();
 
-            Set<AnalysisMethod> methods = findMethods(bigBang, Thread.class, (m) -> m.getName().equals("interrupt"));
+            Set<AnalysisMethod> methods = findMethods(bb, Thread.class, (m) -> m.getName().equals("interrupt"));
             if (methods.size() != 1) {
                 throw new IllegalStateException("Failed to lookup Thread.interrupt().");
             }
             threadInterrupt = methods.iterator().next();
-            methods = findMethods(bigBang, Thread.class, (m) -> m.getName().equals("currentThread"));
+            methods = findMethods(bb, Thread.class, (m) -> m.getName().equals("currentThread"));
             if (methods.size() != 1) {
                 throw new IllegalStateException("Failed to lookup Thread.currentThread().");
             }
@@ -617,16 +619,16 @@ public class PermissionsFeature implements Feature {
     private final class SafePrivilegedRecognizer implements CallGraphFilter {
 
         private final SVMHost hostVM;
-        private final Set<AnalysisMethod> dopriviledged;
+        private final Set<AnalysisMethod> doPrivileged;
 
-        SafePrivilegedRecognizer(BigBang bigbang) {
-            this.hostVM = (SVMHost) bigbang.getHostVM();
-            this.dopriviledged = findMethods(bigbang, java.security.AccessController.class, (m) -> m.getName().equals("doPrivileged") || m.getName().equals("doPrivilegedWithCombiner"));
+        SafePrivilegedRecognizer(BigBang bb) {
+            this.hostVM = (SVMHost) bb.getHostVM();
+            this.doPrivileged = findMethods(bb, java.security.AccessController.class, (m) -> m.getName().equals("doPrivileged") || m.getName().equals("doPrivilegedWithCombiner"));
         }
 
         @Override
         public boolean test(AnalysisMethod method, AnalysisMethod caller, LinkedHashSet<AnalysisMethod> trace) {
-            if (!dopriviledged.contains(method)) {
+            if (!doPrivileged.contains(method)) {
                 return false;
             }
             boolean safeClass = isCompilerClass(caller) || isSystemClass(caller);
@@ -658,12 +660,12 @@ public class PermissionsFeature implements Feature {
         }
 
         /**
-         * Finds an entry point to {@code PrivilegedAction} called by {@code dopriviledgedMethod}.
+         * Finds an entry point to {@code PrivilegedAction} called by {@code doPrivilegedMethod}.
          */
-        private AnalysisMethod findPrivilegedEntryPoint(AnalysisMethod dopriviledgedMethod, LinkedHashSet<AnalysisMethod> trace) {
+        private AnalysisMethod findPrivilegedEntryPoint(AnalysisMethod doPrivilegedMethod, LinkedHashSet<AnalysisMethod> trace) {
             AnalysisMethod ep = null;
             for (AnalysisMethod m : trace) {
-                if (dopriviledgedMethod.equals(m)) {
+                if (doPrivilegedMethod.equals(m)) {
                     return ep;
                 }
                 ep = m;
@@ -674,25 +676,25 @@ public class PermissionsFeature implements Feature {
 
     private final class SafeServiceLoaderRecognizer implements CallGraphFilter {
 
-        private final ResolvedJavaMethod nextService;
+        private final ResolvedJavaMethod providerImplGet;
         private final ImageClassLoader imageClassLoader;
 
-        SafeServiceLoaderRecognizer(BigBang bigBang, ImageClassLoader imageClassLoader) {
-            AnalysisType serviceLoaderIterator = bigBang.forClass("java.util.ServiceLoader$LazyIterator");
-            Set<AnalysisMethod> methods = findMethods(bigBang, serviceLoaderIterator, (m) -> m.getName().equals("nextService"));
+        SafeServiceLoaderRecognizer(BigBang bb, ImageClassLoader imageClassLoader) {
+            AnalysisType serviceLoaderIterator = bb.getMetaAccess().lookupJavaType(loadClassOrFail("java.util.ServiceLoader$ProviderImpl"));
+            Set<AnalysisMethod> methods = findMethods(bb, serviceLoaderIterator, (m) -> m.getName().equals("get"));
             if (methods.size() != 1) {
-                throw new IllegalStateException("Failed to lookup ServiceLoader$LazyIterator.nextService().");
+                throw new IllegalStateException("Failed to lookup ServiceLoader$ProviderImpl.get().");
             }
-            this.nextService = methods.iterator().next();
+            this.providerImplGet = methods.iterator().next();
             this.imageClassLoader = imageClassLoader;
         }
 
         @Override
         public boolean test(AnalysisMethod method, AnalysisMethod caller, LinkedHashSet<AnalysisMethod> trace) {
-            if (nextService.equals(method)) {
+            if (providerImplGet.equals(method)) {
                 AnalysisType instantiatedType = findInstantiatedType(trace);
                 if (instantiatedType != null) {
-                    if (!isRegiseredInServiceLoader(instantiatedType)) {
+                    if (!isRegisteredInServiceLoader(instantiatedType)) {
                         return true;
                     }
                 }
@@ -716,19 +718,19 @@ public class PermissionsFeature implements Feature {
         /**
          * Finds if the given type may be instantiated by ServiceLoader.
          */
-        private boolean isRegiseredInServiceLoader(AnalysisType type) {
+        private boolean isRegisteredInServiceLoader(AnalysisType type) {
             String resource = String.format("META-INF/services/%s", type.toClassName());
             if (imageClassLoader.getClassLoader().getResource(resource) != null) {
                 return true;
             }
             for (AnalysisType ifc : type.getInterfaces()) {
-                if (isRegiseredInServiceLoader(ifc)) {
+                if (isRegisteredInServiceLoader(ifc)) {
                     return true;
                 }
             }
             AnalysisType superClz = type.getSuperclass();
             if (superClz != null) {
-                return isRegiseredInServiceLoader(superClz);
+                return isRegisteredInServiceLoader(superClz);
             }
             return false;
         }
@@ -876,6 +878,7 @@ final class Target_java_lang_SecurityManager {
 }
 
 final class SecurityManagerHolder {
+    @SuppressWarnings("deprecation") // SecurityManager deprecated since 17.
     static final SecurityManager SECURITY_MANAGER = new SecurityManager();
 }
 
@@ -884,5 +887,17 @@ final class Target_java_lang_System {
     @Substitute
     private static SecurityManager getSecurityManager() {
         return SecurityManagerHolder.SECURITY_MANAGER;
+    }
+}
+
+final class LoggerFinderHolder {
+    static final System.LoggerFinder LOGGER_FINDER = System.LoggerFinder.getLoggerFinder();
+}
+
+@TargetClass(value = java.lang.System.LoggerFinder.class, onlyWith = PermissionsFeature.IsEnabled.class)
+final class Target_java_lang_System_LoggerFinder {
+    @Substitute
+    private static System.LoggerFinder getLoggerFinder() {
+        return LoggerFinderHolder.LOGGER_FINDER;
     }
 }

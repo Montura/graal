@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,6 +24,8 @@
  */
 package org.graalvm.compiler.truffle.runtime.hotspot;
 
+import java.lang.reflect.Method;
+
 import org.graalvm.compiler.truffle.common.CompilableTruffleAST;
 import org.graalvm.compiler.truffle.common.OptimizedAssumptionDependency;
 import org.graalvm.compiler.truffle.common.TruffleCompiler;
@@ -34,6 +36,7 @@ import com.oracle.truffle.api.nodes.RootNode;
 
 import jdk.vm.ci.code.InstalledCode;
 import jdk.vm.ci.hotspot.HotSpotNmethod;
+import jdk.vm.ci.hotspot.HotSpotSpeculationLog;
 import jdk.vm.ci.meta.SpeculationLog;
 
 /**
@@ -75,16 +78,35 @@ public class HotSpotOptimizedCallTarget extends OptimizedCallTarget implements O
     }
 
     /**
+     * Reflective reference to {@code HotSpotNmethod.setSpeculationLog} so that this code can be
+     * compiled against older JVMCI API.
+     */
+    private static final Method setSpeculationLog;
+
+    static {
+        Method method = null;
+        try {
+            method = HotSpotNmethod.class.getDeclaredMethod("setSpeculationLog", HotSpotSpeculationLog.class);
+        } catch (NoSuchMethodException e) {
+        }
+        setSpeculationLog = method;
+    }
+
+    /**
      * This method may only be called during compilation, and only by the compiling thread.
      */
     public void setInstalledCode(InstalledCode code) {
-        if (installedCode == code) {
+        assert code != null : "code must never become null";
+        InstalledCode oldCode = this.installedCode;
+        if (oldCode == code) {
             return;
         }
-        if (installedCode.isAlive()) {
-            installedCode.invalidate();
-            onInvalidate(null, null, true);
-        }
+        /*
+         * [GR-31220] This is where we want to make the old code not-entrant but not invalidate.
+         *
+         * oldCode.makeNotEntrant()
+         */
+
         // A default nmethod can be called from entry points in the VM (e.g., Method::_code)
         // and so allowing it to be installed here would invalidate the truth of
         // `soleExecutionEntryPoint`
@@ -93,8 +115,33 @@ public class HotSpotOptimizedCallTarget extends OptimizedCallTarget implements O
             if (nmethod.isDefault()) {
                 throw new IllegalArgumentException("Cannot install a default nmethod for a " + getClass().getSimpleName());
             }
+            tetherSpeculationLog(nmethod);
         }
-        installedCode = code;
+
+        this.installedCode = code;
+    }
+
+    /**
+     * Tethers this object's speculation log with {@code nmethod} if the log has speculations and
+     * manages its failed speculation list. This maintains the invariant described by
+     * {@link AbstractHotSpotTruffleRuntime#createSpeculationLog}.
+     */
+    private void tetherSpeculationLog(HotSpotNmethod nmethod) throws Error, InternalError {
+        if (setSpeculationLog != null) {
+            if (speculationLog instanceof HotSpotSpeculationLog) {
+                HotSpotSpeculationLog log = (HotSpotSpeculationLog) speculationLog;
+                if (log.managesFailedSpeculations() && log.hasSpeculations()) {
+                    try {
+                        // org.graalvm.compiler.truffle.runtime.hotspot.AbstractHotSpotTruffleRuntime.createSpeculationLog()
+                        setSpeculationLog.invoke(nmethod, log);
+                    } catch (Error e) {
+                        throw e;
+                    } catch (Throwable throwable) {
+                        throw new InternalError(throwable);
+                    }
+                }
+            }
+        }
     }
 
     @Override

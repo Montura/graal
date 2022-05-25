@@ -49,15 +49,6 @@ import com.oracle.svm.core.util.UserError;
  */
 public final class ConfigurationFiles {
 
-    private static final String SUFFIX = "-config.json";
-
-    public static final String DYNAMIC_PROXY_NAME = "proxy" + SUFFIX;
-    public static final String RESOURCES_NAME = "resource" + SUFFIX;
-    public static final String JNI_NAME = "jni" + SUFFIX;
-    public static final String REFLECTION_NAME = "reflect" + SUFFIX;
-    public static final String SERIALIZATION_NAME = "serialization" + SUFFIX;
-    public static final String SERIALIZATION_DENY_NAME = "serialization-deny" + SUFFIX;
-
     public static final class Options {
         @Option(help = "Directories directly containing configuration files for dynamic features at runtime.", type = OptionType.User)//
         static final HostedOptionKey<LocatableMultiOptionValue.Strings> ConfigurationFileDirectories = new HostedOptionKey<>(new LocatableMultiOptionValue.Strings());
@@ -95,13 +86,21 @@ public final class ConfigurationFiles {
         @Option(help = "Resources describing program elements to be made accessible via JNI (see JNIConfigurationFiles).", type = OptionType.User)//
         public static final HostedOptionKey<LocatableMultiOptionValue.Strings> JNIConfigurationResources = new HostedOptionKey<>(new LocatableMultiOptionValue.Strings());
 
-        @Option(help = "Comma-separated list of file names with declarative substitutions", type = OptionType.User)//
-        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> SubstitutionFiles = new HostedOptionKey<>(new LocatableMultiOptionValue.Strings());
+        @Option(help = "Files describing predefined classes that can be loaded at runtime.", type = OptionType.User)//
+        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> PredefinedClassesConfigurationFiles = new HostedOptionKey<>(new LocatableMultiOptionValue.Strings());
+        @Option(help = "Resources describing predefined classes that can be loaded at runtime.", type = OptionType.User)//
+        public static final HostedOptionKey<LocatableMultiOptionValue.Strings> PredefinedClassesConfigurationResources = new HostedOptionKey<>(new LocatableMultiOptionValue.Strings());
+
+        @Option(help = "Causes unknown attributes in configuration objects to abort the image build instead of emitting a warning.")//
+        public static final HostedOptionKey<Boolean> StrictConfiguration = new HostedOptionKey<>(false);
     }
 
     public static List<Path> findConfigurationFiles(String fileName) {
         List<Path> files = new ArrayList<>();
         for (String directory : OptionUtils.flatten(",", Options.ConfigurationFileDirectories.getValue())) {
+            if (Files.exists(Paths.get(directory, ConfigurationFile.LOCK_FILE_NAME))) {
+                throw foundLockFile("Configuration file directory '" + directory + "'");
+            }
             Path path = Paths.get(directory, fileName);
             if (Files.exists(path)) {
                 files.add(path);
@@ -121,6 +120,15 @@ public final class ConfigurationFiles {
              */
             final String separator = "/"; // always for resources (not platform-dependent)
             String relativeRoot = Stream.of(root.split(separator)).filter(part -> !part.isEmpty() && !part.equals(".")).collect(Collectors.joining(separator));
+            try {
+                String lockPath = relativeRoot.isEmpty() ? ConfigurationFile.LOCK_FILE_NAME
+                                : (relativeRoot + '/' + ConfigurationFile.LOCK_FILE_NAME);
+                Enumeration<URL> resource = classLoader.getResources(lockPath);
+                if (resource != null && resource.hasMoreElements()) {
+                    throw foundLockFile("Configuration resource root '" + root + "'");
+                }
+            } catch (IOException ignored) {
+            }
             String relativePath = relativeRoot.isEmpty() ? fileName : (relativeRoot + '/' + fileName);
             try {
                 for (Enumeration<URL> e = classLoader.getResources(relativePath); e.hasMoreElements();) {
@@ -131,5 +139,12 @@ public final class ConfigurationFiles {
             }
         }
         return resources;
+    }
+
+    private static UserError.UserException foundLockFile(String container) {
+        throw UserError.abort("%s contains file '%s', which means an agent is currently writing to it." +
+                        "The agent must finish execution before its generated configuration can be used to build a native image." +
+                        "Unless the lock file is a leftover from an earlier process that terminated abruptly, it is unsafe to delete it.",
+                        container, ConfigurationFile.LOCK_FILE_NAME);
     }
 }

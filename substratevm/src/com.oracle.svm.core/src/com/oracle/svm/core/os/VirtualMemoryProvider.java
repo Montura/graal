@@ -24,6 +24,7 @@
  */
 package com.oracle.svm.core.os;
 
+import com.oracle.svm.core.annotate.Uninterruptible;
 import org.graalvm.compiler.api.replacements.Fold;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.word.Pointer;
@@ -80,12 +81,19 @@ public interface VirtualMemoryProvider {
      * physical memory or swap memory is guaranteed to be provisioned for the reserved range.
      *
      * @param nbytes The size in bytes of the address range to be reserved, which will be rounded up
-     *            to a multiple of the {@linkplain #getGranularity() granularity}.
+     *            to a multiple of the {@linkplain #getGranularity() granularity}. This value must
+     *            not be 0.
      * @param alignment The alignment in bytes of the start of the address range to be reserved.
+     * @param executable Indicates if memory for code is requested.
      * @return An {@linkplain #getAlignment aligned} pointer to the beginning of the reserved
      *         address range, or {@link WordFactory#nullPointer()} in case of an error.
      */
-    Pointer reserve(UnsignedWord nbytes, UnsignedWord alignment);
+    Pointer reserve(UnsignedWord nbytes, UnsignedWord alignment, boolean executable);
+
+    @Uninterruptible(reason = "May be called from uninterruptible code.", mayBeInlined = true)
+    default Pointer reserve(UnsignedWord nbytes, UnsignedWord alignment) {
+        return reserve(nbytes, alignment, false);
+    }
 
     /**
      * Map a region of an open file to the specified address range. When {@linkplain Access#WRITE
@@ -99,7 +107,7 @@ public interface VirtualMemoryProvider {
      *            {@link WordFactory#nullPointer() null} to select an available (unreserved,
      *            uncommitted) address range in an arbitrary location.
      * @param nbytes The size in bytes of the file region to be mapped, which need not be a multiple
-     *            of the {@linkplain #getGranularity() granularity}.
+     *            of the {@linkplain #getGranularity() granularity}. This value must not be 0.
      * @param fileHandle A platform-specific open file handle.
      * @param offset The offset in bytes of the region within the file to be mapped, which must be a
      *            multiple of the {@linkplain #getGranularity() granularity}.
@@ -129,7 +137,8 @@ public interface VirtualMemoryProvider {
      *            NULL} to select an available (unreserved, uncommitted) address range in an
      *            arbitrary but {@linkplain #getAlignment aligned} location.
      * @param nbytes The size in bytes of the address range to be committed, which will be rounded
-     *            up to a multiple of the {@linkplain #getGranularity() granularity}.
+     *            up to a multiple of the {@linkplain #getGranularity() granularity}. This value
+     *            must not be 0.
      * @param access The modes in which the memory is permitted to be accessed, see {@link Access}.
      * @return The start of the committed address range, or {@link WordFactory#nullPointer()} in
      *         case of an error, such as inadequate physical memory.
@@ -143,7 +152,8 @@ public interface VirtualMemoryProvider {
      * @param start The start of the address range to be protected, which must be a multiple of the
      *            {@linkplain #getGranularity() granularity}.
      * @param nbytes The size in bytes of the address range to be protected, which will be rounded
-     *            up to a multiple of the {@linkplain #getGranularity() granularity}.
+     *            up to a multiple of the {@linkplain #getGranularity() granularity}. This value
+     *            must not be 0.
      * @param access The modes in which the memory is permitted to be accessed, see {@link Access}.
      * @return 0 when successful, or a non-zero implementation-specific error code.
      */
@@ -159,7 +169,8 @@ public interface VirtualMemoryProvider {
      * @param start The start of the address range to be uncommitted, which must be a multiple of
      *            the {@linkplain #getGranularity() granularity}.
      * @param nbytes The size in bytes of the address range to be uncommitted, which will be rounded
-     *            up to a multiple of the {@linkplain #getGranularity() granularity}.
+     *            up to a multiple of the {@linkplain #getGranularity() granularity}. This value
+     *            must not be 0.
      * @return 0 when successful, or a non-zero implementation-specific error code.
      */
     int uncommit(PointerBase start, UnsignedWord nbytes);
@@ -175,8 +186,19 @@ public interface VirtualMemoryProvider {
      *            was originally returned by {@link #reserve} or {@link #commit commit(NULL, ..)}
      * @param nbytes The size in bytes of the address range to be freed, which must be the exact
      *            size that was originally passed to {@link #reserve} or {@link #commit commit(NULL,
-     *            ..)}
+     *            ..)}. This value must not be 0.
      * @return 0 when successful, or a non-zero implementation-specific error code.
      */
     int free(PointerBase start, UnsignedWord nbytes);
+
+    /**
+     * Toggle a thread-local flag that tells the OS our intention about the usage of pages that are
+     * mapped with MAP_JIT. Only applicable on macOS. Only enforced on AArch64.
+     *
+     * @param protect If write protection is enabled, pages mapped with MAP_JIT have effectively
+     *            READ|EXEC permissions for the calling thread. If disabled, the permissions for the
+     *            same pages turn to READ|WRITE.
+     */
+    default void jitWriteProtect(boolean protect) {
+    }
 }

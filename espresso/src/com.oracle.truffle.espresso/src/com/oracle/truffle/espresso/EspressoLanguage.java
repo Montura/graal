@@ -22,20 +22,29 @@
  */
 package com.oracle.truffle.espresso;
 
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 
-import com.oracle.truffle.espresso.nodes.interop.GetBindingsNode;
+import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
+import com.oracle.truffle.espresso.meta.EspressoError;
+import com.oracle.truffle.espresso.runtime.JavaVersion;
 import org.graalvm.home.Version;
 import org.graalvm.options.OptionDescriptors;
 
 import com.oracle.truffle.api.CallTarget;
-import com.oracle.truffle.api.Truffle;
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.ContextThreadLocal;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.Registration;
+import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.api.instrumentation.ProvidedTags;
 import com.oracle.truffle.api.instrumentation.StandardTags;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.staticobject.DefaultStaticProperty;
+import com.oracle.truffle.api.staticobject.StaticProperty;
+import com.oracle.truffle.api.staticobject.StaticShape;
 import com.oracle.truffle.espresso.descriptors.Names;
 import com.oracle.truffle.espresso.descriptors.Signatures;
 import com.oracle.truffle.espresso.descriptors.StaticSymbols;
@@ -45,25 +54,30 @@ import com.oracle.truffle.espresso.descriptors.Symbol.Type;
 import com.oracle.truffle.espresso.descriptors.Symbols;
 import com.oracle.truffle.espresso.descriptors.Types;
 import com.oracle.truffle.espresso.descriptors.Utf8ConstantTable;
-import com.oracle.truffle.espresso.nodes.interop.DestroyVMNode;
-import com.oracle.truffle.espresso.nodes.interop.ExitCodeNode;
+import com.oracle.truffle.espresso.meta.JavaKind;
+import com.oracle.truffle.espresso.nodes.commands.DestroyVMNode;
+import com.oracle.truffle.espresso.nodes.commands.ExitCodeNode;
+import com.oracle.truffle.espresso.nodes.commands.GetBindingsNode;
+import com.oracle.truffle.espresso.nodes.commands.ReferenceProcessNode;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
-import com.oracle.truffle.espresso.runtime.EspressoExitException;
+import com.oracle.truffle.espresso.runtime.EspressoThreadLocalState;
+import com.oracle.truffle.espresso.runtime.StaticObject;
+import com.oracle.truffle.espresso.runtime.StaticObject.StaticObjectFactory;
 import com.oracle.truffle.espresso.substitutions.Substitutions;
 
+// TODO: Update website once Espresso has one
 @Registration(id = EspressoLanguage.ID, //
                 name = EspressoLanguage.NAME, //
                 implementationName = EspressoLanguage.IMPLEMENTATION_NAME, //
-                version = EspressoLanguage.VERSION, //
                 contextPolicy = TruffleLanguage.ContextPolicy.EXCLUSIVE, //
-                dependentLanguages = {"nfi", "llvm"})
+                dependentLanguages = "nfi", //
+                website = "https://www.graalvm.org/dev/reference-manual/java-on-truffle/")
 @ProvidedTags({StandardTags.RootTag.class, StandardTags.RootBodyTag.class, StandardTags.StatementTag.class})
 public final class EspressoLanguage extends TruffleLanguage<EspressoContext> {
 
     public static final String ID = "java";
     public static final String NAME = "Java";
     public static final String IMPLEMENTATION_NAME = "Espresso";
-    public static final String VERSION = "1.8|11";
 
     // Espresso VM info
     public static final String VM_SPECIFICATION_NAME = "Java Virtual Machine Specification";
@@ -82,8 +96,25 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> {
 
     private long startupClockNanos = 0;
 
+    private static final StaticProperty ARRAY_PROPERTY = new DefaultStaticProperty("array");
+    // This field should be static final, but until we move the static object model we cannot have a
+    // SubstrateVM feature which will allow us to set the right field offsets at image build time.
+    @CompilationFinal //
+    private static StaticShape<StaticObjectFactory> arrayShape;
+
+    private static final StaticProperty FOREIGN_PROPERTY = new DefaultStaticProperty("foreignObject");
+    // This field should be static final, but until we move the static object model we cannot have a
+    // SubstrateVM feature which will allow us to set the right field offsets at image build time.
+    @CompilationFinal //
+    private static StaticShape<StaticObjectFactory> foreignShape;
+
+    @CompilationFinal private JavaVersion javaVersion;
+
+    private final ContextThreadLocal<EspressoThreadLocalState> threadLocalState = createContextThreadLocal((context, thread) -> new EspressoThreadLocalState(context));
+
     public EspressoLanguage() {
         // Initialize statically defined symbols and substitutions.
+        JavaKind.ensureInitialized();
         Name.ensureInitialized();
         Type.ensureInitialized();
         Signature.ensureInitialized();
@@ -101,6 +132,14 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> {
     @Override
     protected OptionDescriptors getOptionDescriptors() {
         return new EspressoOptionsOptionDescriptors();
+    }
+
+    public EspressoThreadLocalState getThreadLocalState() {
+        return threadLocalState.get();
+    }
+
+    public EspressoThreadLocalState getThreadLocalStateFor(Thread t) {
+        return threadLocalState.get(t);
     }
 
     @Override
@@ -130,9 +169,11 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> {
         context.prepareDispose();
         try {
             context.doExit(0);
-        } catch (EspressoExitException e) {
+        } catch (AbstractTruffleException e) {
             // Expected. Suppress. We do not want to throw during context closing.
         }
+
+        context.setFinalized();
     }
 
     @Override
@@ -147,19 +188,23 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> {
 
     @Override
     protected CallTarget parse(final ParsingRequest request) throws Exception {
-        assert getCurrentContext().isInitialized();
+        assert EspressoContext.get(null).isInitialized();
         String contents = request.getSource().getCharacters().toString();
         if (DestroyVMNode.EVAL_NAME.equals(contents)) {
             RootNode node = new DestroyVMNode(this);
-            return Truffle.getRuntime().createCallTarget(node);
+            return node.getCallTarget();
         }
         if (ExitCodeNode.EVAL_NAME.equals(contents)) {
             RootNode node = new ExitCodeNode(this);
-            return Truffle.getRuntime().createCallTarget(node);
+            return node.getCallTarget();
         }
         if (GetBindingsNode.EVAL_NAME.equals(contents)) {
             RootNode node = new GetBindingsNode(this);
-            return Truffle.getRuntime().createCallTarget(node);
+            return node.getCallTarget();
+        }
+        if (ReferenceProcessNode.EVAL_NAME.equals(contents)) {
+            RootNode node = new ReferenceProcessNode(this);
+            return node.getCallTarget();
         }
         throw new UnsupportedOperationException("Unsupported operation. Use the language bindings to load classes e.g. context.getBindings(\"" + ID + "\").getMember(\"java.lang.Integer\")");
     }
@@ -178,10 +223,6 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> {
 
     public Signatures getSignatures() {
         return signatures;
-    }
-
-    public static EspressoContext getCurrentContext() {
-        return getCurrentContext(EspressoLanguage.class);
     }
 
     @Override
@@ -207,4 +248,68 @@ public final class EspressoLanguage extends TruffleLanguage<EspressoContext> {
         context.disposeThread(thread);
     }
 
+    public static StaticProperty getArrayProperty() {
+        return ARRAY_PROPERTY;
+    }
+
+    public StaticShape<StaticObjectFactory> getArrayShape() {
+        if (arrayShape == null) {
+            return initializeArrayShape();
+        }
+        return arrayShape;
+    }
+
+    @CompilerDirectives.TruffleBoundary
+    private StaticShape<StaticObjectFactory> initializeArrayShape() {
+        synchronized (EspressoLanguage.class) {
+            if (arrayShape == null) {
+                arrayShape = StaticShape.newBuilder(this).property(ARRAY_PROPERTY, Object.class, true).build(StaticObject.class, StaticObjectFactory.class);
+            }
+            return arrayShape;
+        }
+    }
+
+    public static StaticProperty getForeignProperty() {
+        return FOREIGN_PROPERTY;
+    }
+
+    public StaticShape<StaticObjectFactory> getForeignShape() {
+        if (foreignShape == null) {
+            return initializeForeignShape();
+        }
+        return foreignShape;
+    }
+
+    @CompilerDirectives.TruffleBoundary
+    private StaticShape<StaticObjectFactory> initializeForeignShape() {
+        synchronized (EspressoLanguage.class) {
+            if (foreignShape == null) {
+                foreignShape = StaticShape.newBuilder(this).property(FOREIGN_PROPERTY, Object.class, true).build(StaticObject.class, StaticObjectFactory.class);
+            }
+            return foreignShape;
+        }
+    }
+
+    private static final LanguageReference<EspressoLanguage> REFERENCE = LanguageReference.create(EspressoLanguage.class);
+
+    public static EspressoLanguage get(Node node) {
+        return REFERENCE.get(node);
+    }
+
+    public JavaVersion getJavaVersion() {
+        return javaVersion;
+    }
+
+    public void tryInitializeJavaVersion(JavaVersion version) {
+        JavaVersion ref = this.javaVersion;
+        if (ref == null) {
+            synchronized (this) {
+                ref = this.javaVersion;
+                if (ref == null) {
+                    this.javaVersion = ref = Objects.requireNonNull(version);
+                }
+            }
+        }
+        EspressoError.guarantee(version.equals(ref), "incompatible Java versions");
+    }
 }

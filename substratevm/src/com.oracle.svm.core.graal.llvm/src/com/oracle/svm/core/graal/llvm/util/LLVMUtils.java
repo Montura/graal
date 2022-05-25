@@ -49,6 +49,7 @@ import jdk.vm.ci.meta.ValueKind;
 public class LLVMUtils {
     static final int FALSE = 0;
     static final int TRUE = 1;
+    static final long ENUM_ATTRIBUTE_VALUE = 0L;
 
     public interface LLVMValueWrapper {
         LLVMValueRef get();
@@ -172,7 +173,7 @@ public class LLVMUtils {
         @Override
         public LLVMValueRef get() {
             LLVMIRBuilder builder = gen.getBuilder();
-            LLVMValueRef register = gen.getSpecialRegister(reg);
+            LLVMValueRef register = gen.getSpecialRegisterValue(reg);
             return offset == null ? register : builder.buildGEP(builder.buildIntToPtr(register, builder.rawPointerType()), offset);
         }
     }

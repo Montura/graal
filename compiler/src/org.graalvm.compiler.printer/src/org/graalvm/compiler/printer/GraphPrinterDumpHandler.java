@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,6 +25,7 @@
 package org.graalvm.compiler.printer;
 
 import static org.graalvm.compiler.debug.DebugConfig.asJavaMethod;
+import static org.graalvm.compiler.debug.DebugOptions.PrintUnmodifiedGraphs;
 
 import java.io.IOException;
 import java.nio.channels.ClosedByInterruptException;
@@ -68,6 +69,8 @@ public final class GraphPrinterDumpHandler implements DebugDumpHandler {
     protected GraphPrinter printer;
     private List<String> previousInlineContext;
     private CompilationIdentifier previousCompilationID = CompilationIdentifier.INVALID_COMPILATION_ID;
+    private Graph lastGraph;
+    private int lastModCount;
     private int[] dumpIds = {};
     private int failuresCount;
     private Map<Graph, List<String>> inlineContextMap;
@@ -126,7 +129,7 @@ public final class GraphPrinterDumpHandler implements DebugDumpHandler {
 
     @Override
     @SuppressWarnings("try")
-    public void dump(DebugContext debug, Object object, final String format, Object... arguments) {
+    public void dump(Object object, DebugContext debug, boolean forced, final String format, Object... arguments) {
         OptionValues options = debug.getOptions();
         if (object instanceof Graph && DebugOptions.PrintGraph.getValue(options) != PrintGraphTarget.Disable) {
             final Graph graph = (Graph) object;
@@ -197,7 +200,11 @@ public final class GraphPrinterDumpHandler implements DebugDumpHandler {
                     }
                     properties.put("StageFlags", ((StructuredGraph) graph).getStageFlags());
                 }
-                printer.print(debug, graph, properties, nextDumpId(), format, arguments);
+                if (PrintUnmodifiedGraphs.getValue(options) || lastGraph != graph || lastModCount != graph.getEdgeModificationCount()) {
+                    printer.print(debug, graph, properties, nextDumpId(), format, arguments);
+                    lastGraph = graph;
+                    lastModCount = graph.getEdgeModificationCount();
+                }
             } catch (IOException e) {
                 handleException(debug, e);
             } catch (Throwable e) {

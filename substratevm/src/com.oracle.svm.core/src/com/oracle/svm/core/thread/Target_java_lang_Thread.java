@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -34,6 +34,7 @@ import org.graalvm.nativeimage.IsolateThread;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.Alias;
+import com.oracle.svm.core.annotate.AnnotateOriginal;
 import com.oracle.svm.core.annotate.Delete;
 import com.oracle.svm.core.annotate.Inject;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
@@ -41,22 +42,25 @@ import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.annotate.Uninterruptible;
+import com.oracle.svm.core.jdk.ContinuationsNotSupported;
+import com.oracle.svm.core.jdk.ContinuationsSupported;
 import com.oracle.svm.core.jdk.JDK11OrEarlier;
-import com.oracle.svm.core.jdk.JDK11OrLater;
-import com.oracle.svm.core.jdk.JDK14OrLater;
-import com.oracle.svm.core.jdk.JDK8OrEarlier;
+import com.oracle.svm.core.jdk.JDK17OrLater;
 import com.oracle.svm.core.jdk.LoomJDK;
 import com.oracle.svm.core.jdk.NotLoomJDK;
-import com.oracle.svm.core.jdk.UninterruptibleUtils.AtomicReference;
 import com.oracle.svm.core.monitor.MonitorSupport;
-import com.oracle.svm.core.option.XOptions;
-import com.oracle.svm.core.stack.StackOverflowCheck;
 import com.oracle.svm.core.util.VMError;
 
 @TargetClass(Thread.class)
 @SuppressWarnings({"unused"})
 public final class Target_java_lang_Thread {
 
+    // Checkstyle: stop
+    @Alias //
+    static StackTraceElement[] EMPTY_STACK_TRACE;
+    // Checkstyle: resume
+
+    /** This field is initialized when the thread actually starts executing. */
     @Inject //
     @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
     IsolateThread isolateThread;
@@ -66,26 +70,23 @@ public final class Target_java_lang_Thread {
      *
      * After JDK 11, a field with same name has been introduced and the logic to set / reset it has
      * moved into Java code. So this injected field and the substitutions that maintain it are no
-     * longer necessary.
+     * longer necessary. See {@link #interruptedJDK17OrLater}.
      */
     @Inject //
     @TargetElement(onlyWith = JDK11OrEarlier.class) //
-    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset)//
-    volatile boolean interrupted;
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
+    volatile boolean interruptedJDK11OrEarlier;
 
-    @Inject @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset)//
-    boolean wasStartedByCurrentIsolate;
+    @Alias //
+    @TargetElement(name = "interrupted", onlyWith = JDK17OrLater.class) //
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
+    volatile boolean interruptedJDK17OrLater;
 
-    /**
-     * Every thread has a {@link ParkEvent} for {@link sun.misc.Unsafe#park} and
-     * {@link sun.misc.Unsafe#unpark}. Lazily initialized.
-     */
-    @Inject @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.NewInstance, declClass = AtomicReference.class)//
-    AtomicReference<ParkEvent> unsafeParkEvent;
+    @Inject @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
+    long parentThreadId;
 
-    /** Every thread has a {@link ParkEvent} for {@link Thread#sleep}. Lazily initialized. */
-    @Inject @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.NewInstance, declClass = AtomicReference.class)//
-    AtomicReference<ParkEvent> sleepParkEvent;
+    @Inject @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.NewInstance, declClass = ThreadData.class)//
+    UnacquiredThreadData threadData;
 
     @Alias//
     ClassLoader contextClassLoader;
@@ -107,6 +108,9 @@ public final class Target_java_lang_Thread {
     /* The group of this thread */
     @Alias @TargetElement(onlyWith = NotLoomJDK.class)//
     ThreadGroup group;
+
+    @Alias//
+    Target_java_lang_ThreadLocal_ThreadLocalMap inheritableThreadLocals = null;
 
     /*
      * The requested stack size for this thread, or 0 if the creator did not specify a stack size.
@@ -134,7 +138,7 @@ public final class Target_java_lang_Thread {
      * inherit a (more or less random) access control context.
      */
     @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
-    private AccessControlContext inheritedAccessControlContext;
+    public AccessControlContext inheritedAccessControlContext;
 
     @Alias @TargetElement(onlyWith = NotLoomJDK.class) //
     @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = ThreadStatusRecomputation.class) //
@@ -144,6 +148,14 @@ public final class Target_java_lang_Thread {
     /* private */ /* final */ Object blockerLock;
     @Alias @TargetElement(onlyWith = LoomJDK.class) //
     Object interruptLock;
+
+    @Alias @TargetElement(onlyWith = NotLoomJDK.class) //
+    volatile Target_sun_nio_ch_Interruptible blocker;
+
+    /** @see JavaThreads#setCurrentThreadLockHelper */
+    @Inject @TargetElement(onlyWith = ContinuationsSupported.class) //
+    @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
+    Object lockHelper;
 
     @Alias
     native void setPriority(int newPriority);
@@ -162,13 +174,13 @@ public final class Target_java_lang_Thread {
     @Substitute
     @TargetElement(onlyWith = NotLoomJDK.class) //
     static long nextThreadID() {
-        return JavaThreads.singleton().threadSeqNumber.incrementAndGet();
+        return JavaThreads.threadSeqNumber.incrementAndGet();
     }
 
     /** Replace "synchronized" modifier with delegation to an atomic increment. */
     @Substitute
     private static int nextThreadNum() {
-        return JavaThreads.singleton().threadInitNumber.incrementAndGet();
+        return JavaThreads.threadInitNumber.incrementAndGet();
     }
 
     @Alias
@@ -183,16 +195,14 @@ public final class Target_java_lang_Thread {
          * Raw creation of a thread without calling init(). Used to create a Thread object for an
          * already running thread.
          */
+        this.threadData = new ThreadData();
 
-        this.unsafeParkEvent = new AtomicReference<>();
-        this.sleepParkEvent = new AtomicReference<>();
-
-        JavaContinuations.LoomCompatibilityUtil.initThreadFields(this,
-                        (withGroup != null) ? withGroup : JavaThreads.singleton().mainGroup,
+        LoomSupport.CompatibilityUtil.initThreadFields(this,
+                        (withGroup != null) ? withGroup : PlatformThreads.singleton().mainGroup,
                         null, 0,
                         Thread.NORM_PRIORITY, asDaemon, ThreadStatus.RUNNABLE);
 
-        if (JavaContinuations.useLoom()) {
+        if (LoomSupport.isEnabled()) {
             tid = Target_java_lang_Thread_ThreadIdentifiers.next();
         } else {
             tid = nextThreadID();
@@ -202,64 +212,62 @@ public final class Target_java_lang_Thread {
         contextClassLoader = ClassLoader.getSystemClassLoader();
     }
 
-    @Uninterruptible(reason = "called from uninterruptible code", mayBeInlined = true)
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     @Substitute
-    @TargetElement(onlyWith = NotLoomJDK.class)
-    static Thread currentThread() {
-        return JavaThreads.currentThread.get();
+    public long getId() {
+        return tid;
     }
 
-    @Uninterruptible(reason = "called from uninterruptible code", mayBeInlined = true)
+    @AnnotateOriginal
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public native String getName();
+
+    @AnnotateOriginal
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    public native ThreadGroup getThreadGroup();
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Substitute
+    public boolean isDaemon() {
+        return daemon;
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
+    @Substitute
+    @TargetElement(onlyWith = ContinuationsNotSupported.class)
+    static Thread currentThread() {
+        Thread thread = PlatformThreads.currentThread.get();
+        assert thread != null : "Thread has not been set yet";
+        return thread;
+    }
+
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     @Substitute
     @TargetElement(onlyWith = LoomJDK.class)
     private static Thread currentThread0() {
-        return JavaThreads.currentThread.get();
+        Thread thread = PlatformThreads.currentThread.get();
+        assert thread != null : "Thread has not been set yet";
+        return thread;
     }
 
-    @Inject @TargetElement(onlyWith = LoomJDK.class)//
+    @Inject @TargetElement(onlyWith = ContinuationsSupported.class)//
     @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset)//
     Thread vthread = null;
 
-    /**
-     * `do_vthread` intrinsic.
-     *
-     * Ref: "Intrinsify currentThread()"
-     * https://github.com/openjdk/loom/commit/457195f6460f6bb713a4a3c02879143073bed0c7
-     */
-    @Uninterruptible(reason = "called from uninterruptible code", mayBeInlined = true)
+    @Uninterruptible(reason = "Called from uninterruptible code.", mayBeInlined = true)
     @Substitute
-    @TargetElement(name = "currentThread", onlyWith = LoomJDK.class)
+    @TargetElement(name = "currentThread", onlyWith = ContinuationsSupported.class)
     static Thread currentVThread() {
-        Target_java_lang_Thread thread = SubstrateUtil.cast(currentThread0(),
-                        Target_java_lang_Thread.class);
-        if (thread.vthread != null) {
-            return thread.vthread;
-        } else {
-            return SubstrateUtil.cast(thread, Thread.class);
-        }
+        Thread thread = PlatformThreads.currentThread.get();
+        Target_java_lang_Thread tjlt = SubstrateUtil.cast(thread, Target_java_lang_Thread.class);
+        return (tjlt.vthread != null) ? tjlt.vthread : thread;
     }
 
     @SuppressWarnings("static-method")
     @Substitute
     @TargetElement(onlyWith = LoomJDK.class)
     void setCurrentThread(Thread thread) {
-        Thread currentCarrierThread = currentThread0();
-        assert SubstrateUtil.cast(currentCarrierThread, Target_java_lang_Thread.class) == this;
-        if (thread == currentCarrierThread) {
-            vthread = null;
-        } else {
-            vthread = thread;
-        }
-    }
-
-    @Substitute
-    @TargetElement(onlyWith = JDK8OrEarlier.class)
-    private void init(ThreadGroup groupArg, Runnable targetArg, String nameArg, long stackSizeArg) {
-        /* Injected Target_java_lang_Thread instance field initialization. */
-        this.unsafeParkEvent = new AtomicReference<>();
-        this.sleepParkEvent = new AtomicReference<>();
-        /* Initialize the rest of the Thread object. */
-        JavaThreads.initializeNewThread(this, groupArg, targetArg, nameArg, stackSizeArg);
+        PlatformThreads.setCurrentThread(JavaThreads.fromTarget(this), thread);
     }
 
     @Alias
@@ -268,7 +276,7 @@ public final class Target_java_lang_Thread {
 
     @Substitute
     @SuppressWarnings({"unused"})
-    @TargetElement(onlyWith = {JDK11OrLater.class, NotLoomJDK.class})
+    @TargetElement(onlyWith = NotLoomJDK.class)
     private Target_java_lang_Thread(
                     ThreadGroup g,
                     Runnable target,
@@ -279,10 +287,9 @@ public final class Target_java_lang_Thread {
         /* Non-0 instance field initialization. */
         this.blockerLock = new Object();
         /* Injected Target_java_lang_Thread instance field initialization. */
-        this.unsafeParkEvent = new AtomicReference<>();
-        this.sleepParkEvent = new AtomicReference<>();
-        /* Initialize the rest of the Thread object, ignoring `acc` and `inheritThreadLocals`. */
-        JavaThreads.initializeNewThread(this, g, target, name, stackSize);
+        this.threadData = new ThreadData();
+        /* Initialize the rest of the Thread object. */
+        JavaThreads.initializeNewThread(this, g, target, name, stackSize, acc, inheritThreadLocals);
     }
 
     @Substitute
@@ -298,13 +305,14 @@ public final class Target_java_lang_Thread {
         /* Non-0 instance field initialization. */
         this.interruptLock = new Object();
         /* Injected Target_java_lang_Thread instance field initialization. */
-        this.unsafeParkEvent = new AtomicReference<>();
-        this.sleepParkEvent = new AtomicReference<>();
+        this.threadData = new ThreadData();
 
         checkCharacteristics(characteristics);
 
-        /* Initialize the rest of the Thread object, ignoring `acc` and `characteristics`. */
-        JavaThreads.initializeNewThread(this, g, target, name, stackSize);
+        // TODO: derive from characteristics bitset
+        boolean inheritThreadLocals = false;
+        /* Initialize the rest of the Thread object, ignoring `characteristics`. */
+        JavaThreads.initializeNewThread(this, g, target, name, stackSize, acc, inheritThreadLocals);
     }
 
     /**
@@ -329,81 +337,63 @@ public final class Target_java_lang_Thread {
             throw VMError.unsupportedFeature("Single-threaded VM cannot create new threads");
         }
 
-        /* Choose a stack size based on parameters, command line flags, and system restrictions. */
-        long chosenStackSize = SubstrateOptions.StackSize.getHostedValue();
-        long stackSize = JavaContinuations.LoomCompatibilityUtil.getStackSize(this);
-        if (stackSize != 0) {
-            /* If the user set a thread stack size at thread creation, then use that. */
-            chosenStackSize = stackSize;
-        } else {
-            /* If the user set a thread stack size on the command line, then use that. */
-            final int defaultThreadStackSize = (int) XOptions.getXss().getValue();
-            if (defaultThreadStackSize != 0L) {
-                chosenStackSize = defaultThreadStackSize;
-            }
+        parentThreadId = Thread.currentThread().getId();
+        long stackSize = PlatformThreads.getRequestedStackSize(JavaThreads.fromTarget(this));
+        try {
+            PlatformThreads.singleton().startThread(JavaThreads.fromTarget(this), stackSize);
+        } catch (Throwable t) {
+            parentThreadId = 0; // should not be accessed if thread could not start, but reset still
+            throw t;
         }
-
-        if (chosenStackSize != 0) {
-            /*
-             * Add the yellow+red zone size: This area of the stack is not accessible to the user's
-             * Java code, so it would be surprising if we gave the user less stack space to use than
-             * explicitly requested. In particular, a size less than the yellow+red size would lead
-             * to an immediate StackOverflowError.
-             */
-            chosenStackSize += StackOverflowCheck.singleton().yellowAndRedZoneSize();
-        }
-
         /*
-         * The threadStatus must be set to RUNNABLE by the parent thread and before the child thread
-         * starts because we are creating child threads asynchronously (there is no coordination
-         * between parent and child threads).
-         *
-         * Otherwise, a call to Thread.join() in the parent thread could succeed even before the
-         * child thread starts, or it could hang in case that the child thread is already dead.
+         * The threadStatus must be RUNNABLE before returning so the caller can safely use
+         * Thread.join() on the launched thread, but the thread could also already have changed its
+         * state itself. Atomically switch from NEW to RUNNABLE if it has not.
          */
-        JavaContinuations.LoomCompatibilityUtil.setThreadStatus(this, ThreadStatus.RUNNABLE);
-        wasStartedByCurrentIsolate = true;
-        JavaThreads.singleton().startThread(JavaThreads.fromTarget(this), chosenStackSize);
+        LoomSupport.CompatibilityUtil.compareAndSetThreadStatus(this, ThreadStatus.NEW, ThreadStatus.RUNNABLE);
     }
 
     @Substitute
     @SuppressWarnings({"static-method"})
     protected void setNativeName(String name) {
-        JavaThreads.singleton().setNativeName(JavaThreads.fromTarget(this), name);
+        PlatformThreads.singleton().setNativeName(JavaThreads.fromTarget(this), name);
     }
 
     @Substitute
     private void setPriority0(int priority) {
     }
 
+    /**
+     * Avoid in VM-internal contexts: this method is not {@code final} and can be overridden with
+     * code that does locking or performs other actions that can be unsafe in a specific context.
+     * Use {@link JavaThreads#isInterrupted} instead.
+     */
     @Substitute
-    @TargetElement(onlyWith = JDK11OrEarlier.class)
-    private boolean isInterrupted(boolean clearInterrupted) {
-        final boolean result = interrupted;
-        if (result && clearInterrupted) {
-            /*
-             * As we don't use a lock, it is possible to observe any kinds of races with other
-             * threads that try to set interrupted to true. However, those races don't cause any
-             * correctness issues as we only reset interrupted to false if we observed that it was
-             * true earlier. There also can't be any problematic races with other calls to
-             * isInterrupted as clearInterrupted may only be true if this method is being executed
-             * by the current thread.
-             */
-            interrupted = false;
-        }
-        return result;
+    @SuppressWarnings("static-method")
+    public boolean isInterrupted() {
+        return JavaThreads.isInterrupted(JavaThreads.fromTarget(this));
     }
+
+    @Substitute
+    public static boolean interrupted() {
+        return JavaThreads.getAndClearInterrupt(Thread.currentThread());
+    }
+
+    @Delete
+    @TargetElement(onlyWith = JDK11OrEarlier.class)
+    private native boolean isInterrupted(boolean clearInterrupted);
 
     /**
      * Marks the thread as interrupted and wakes it up.
      *
-     * See {@link JavaThreads#park()}, {@link JavaThreads#park(long)} and {@link JavaThreads#sleep}
-     * for vital aspects of the underlying mechanisms.
+     * See {@link PlatformThreads#parkCurrentPlatformOrCarrierThread()},
+     * {@link PlatformThreads#unpark} and {@link JavaThreads#sleep} for vital aspects of the
+     * underlying mechanisms.
      */
     @Substitute
     void interrupt0() {
         if (JavaVersionUtil.JAVA_SPEC <= 11) {
-            interrupted = true;
+            interruptedJDK11OrEarlier = true;
         } else {
             /*
              * After JDK 11, the interrupted flag is maintained by the JDK in Java code, i.e.,
@@ -417,9 +407,18 @@ public final class Target_java_lang_Thread {
         }
 
         Thread thread = JavaThreads.fromTarget(this);
-        JavaThreads.interrupt(thread);
-        JavaThreads.unpark(thread);
-        JavaThreads.wakeUpVMConditionWaiters(thread);
+        PlatformThreads.interrupt(thread);
+        /*
+         * This may unpark the thread unnecessarily (e.g., the interrupt above could have already
+         * resumed the thread execution, so the thread could now be parked for some other reason).
+         * However, this is not a correctness issue as the unpark will only be a spurious wakeup.
+         */
+        PlatformThreads.unpark(thread);
+        /*
+         * Must be executed after setting interrupted to true, see
+         * HeapImpl.waitForReferencePendingList().
+         */
+        PlatformThreads.wakeUpVMConditionWaiters(thread);
     }
 
     @Substitute
@@ -464,29 +463,26 @@ public final class Target_java_lang_Thread {
     @Substitute
     @TargetElement(onlyWith = NotLoomJDK.class)
     private boolean isAlive() {
-        // There are fewer cases that are not-alive.
-        return JavaThreads.isAlive(threadStatus);
+        return JavaThreads.isAlive(JavaThreads.fromTarget(this));
     }
 
     @Substitute
     @TargetElement(onlyWith = LoomJDK.class)
     private boolean isAlive0() {
-        return JavaThreads.isAlive(holder.threadStatus);
+        return PlatformThreads.isAlive(JavaThreads.fromTarget(this));
     }
 
     @Substitute
     @TargetElement(onlyWith = NotLoomJDK.class)
     private static void yield() {
-        JavaThreads.singleton().yield();
+        JavaThreads.yieldCurrent();
     }
 
-    /**
-     * copy of {@link Target_java_lang_Thread#yield()}.
-     */
     @Substitute
     @TargetElement(onlyWith = LoomJDK.class)
     private static void yield0() {
-        JavaThreads.singleton().yield();
+        // Loom virtual threads are handled in yield()
+        JavaThreads.yieldCurrent();
     }
 
     @Substitute
@@ -495,13 +491,17 @@ public final class Target_java_lang_Thread {
         JavaThreads.sleep(millis);
     }
 
-    /**
-     * copy of {@link Target_java_lang_Thread#sleep(long)}.
-     */
     @Substitute
     @TargetElement(onlyWith = LoomJDK.class)
     private static void sleep0(long millis) throws InterruptedException {
+        // Loom virtual threads are handled in sleep()
         JavaThreads.sleep(millis);
+    }
+
+    @Substitute
+    @TargetElement
+    public void join(long millis) throws InterruptedException {
+        JavaThreads.join(JavaThreads.fromTarget(this), millis);
     }
 
     /**
@@ -516,7 +516,7 @@ public final class Target_java_lang_Thread {
 
     @Substitute
     private StackTraceElement[] getStackTrace() {
-        if (JavaThreads.isVirtual(JavaThreads.fromTarget(this))) {
+        if (LoomSupport.isEnabled() && VirtualThreads.singleton().isVirtual(JavaThreads.fromTarget(this))) {
             return asyncGetStackTrace();
         }
         return JavaThreads.getStackTrace(JavaThreads.fromTarget(this));
@@ -531,18 +531,17 @@ public final class Target_java_lang_Thread {
 
     @Substitute
     private static Map<Thread, StackTraceElement[]> getAllStackTraces() {
-        return JavaThreads.getAllStackTraces();
+        return PlatformThreads.getAllStackTraces();
     }
 
-    @Substitute
-    @TargetElement(onlyWith = JDK14OrLater.class)
-    private static void clearInterruptEvent() {
-        /*
-         * In the JDK, this is a no-op except on Windows. The JDK resets the interrupt event used by
-         * Process.waitFor ResetEvent((HANDLE) JVM_GetThreadInterruptEvent()); Our implementation in
-         * WindowsJavaThreads.java takes care of this ResetEvent.
-         */
-    }
+    /**
+     * In the JDK, this is a no-op except on Windows. The JDK resets the interrupt event used by
+     * Process.waitFor ResetEvent((HANDLE) JVM_GetThreadInterruptEvent()); Our implementation in
+     * WindowsJavaThreads.java takes care of this ResetEvent.
+     */
+    @Delete
+    @TargetElement(onlyWith = JDK17OrLater.class)
+    private static native void clearInterruptEvent();
 
     @Substitute
     @TargetElement(onlyWith = LoomJDK.class)
@@ -582,7 +581,7 @@ final class Target_java_lang_Thread_FieldHolder {
     @Alias //
     boolean daemon;
     @Alias //
-    int threadStatus;
+    volatile int threadStatus;
 
     Target_java_lang_Thread_FieldHolder(
                     ThreadGroup group,
@@ -604,10 +603,16 @@ final class Target_java_lang_Thread_FieldHolder {
 final class Target_java_lang_Thread_ThreadIdentifiers {
     @Substitute//
     static long next() {
-        return JavaThreads.singleton().threadSeqNumber.incrementAndGet();
+        return JavaThreads.threadSeqNumber.incrementAndGet();
     }
 }
 
 @TargetClass(value = Thread.class, innerClass = "VirtualThreads", onlyWith = LoomJDK.class)
 final class Target_java_lang_Thread_VirtualThreads {
+}
+
+@TargetClass(className = "sun.nio.ch.Interruptible")
+interface Target_sun_nio_ch_Interruptible {
+    @Alias
+    void interrupt(Thread t);
 }

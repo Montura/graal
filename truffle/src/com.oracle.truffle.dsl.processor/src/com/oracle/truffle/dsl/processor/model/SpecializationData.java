@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -59,14 +59,13 @@ import com.oracle.truffle.dsl.processor.ProcessorContext;
 import com.oracle.truffle.dsl.processor.expression.DSLExpression;
 import com.oracle.truffle.dsl.processor.expression.DSLExpression.AbstractDSLExpressionVisitor;
 import com.oracle.truffle.dsl.processor.expression.DSLExpression.Call;
+import com.oracle.truffle.dsl.processor.expression.DSLExpression.Variable;
 import com.oracle.truffle.dsl.processor.java.ElementUtils;
 
 public final class SpecializationData extends TemplateMethod {
 
     public enum SpecializationKind {
-        UNINITIALIZED,
         SPECIALIZED,
-        POLYMORPHIC,
         FALLBACK
     }
 
@@ -121,6 +120,54 @@ public final class SpecializationData extends TemplateMethod {
         copy.limitExpression = limitExpression;
         copy.aotReachable = aotReachable;
         return copy;
+    }
+
+    /**
+     * Returns true if an expression can always be folded to a constant during PE. Method calls are
+     * natural boundaries as we cannot look into them at annotation processing time. The passed
+     * expression must be resolved.
+     */
+    public boolean isCompilationFinalExpression(DSLExpression expression) {
+        if (!(expression instanceof Variable)) {
+            // fast-path check
+            return false;
+        }
+
+        if (expression.resolveConstant() != null) {
+            return true;
+        }
+
+        /*
+         * Check whether the expression is of form a.b.c with final or compilation final values.
+         */
+        DSLExpression current = expression;
+        while (current != null) {
+            if (!(current instanceof Variable)) {
+                return false;
+            }
+
+            Variable variable = (Variable) current;
+            // if not a final field
+            if (!variable.isCompilationFinalField()) {
+                Parameter boundParameter = findByVariable(variable.getResolvedVariable());
+                // and not a bound parameter
+                if (boundParameter == null) {
+                    // it cannot be compilation final
+                    return false;
+                }
+            }
+
+            current = variable.getReceiver();
+        }
+
+        // do a more thorough analysis of whether a dynamic parameter is bound, possibly indirectly
+        // e.g. through @Bind.
+        if (isDynamicParameterBound(expression, true)) {
+            // dynamic parameters cannot be known to be PE final (they might be though).
+            return false;
+        }
+
+        return true;
     }
 
     public boolean isPrepareForAOT() {
@@ -421,10 +468,6 @@ public final class SpecializationData extends TemplateMethod {
         return replaced;
     }
 
-    public boolean isPolymorphic() {
-        return kind == SpecializationKind.POLYMORPHIC;
-    }
-
     @Override
     protected List<MessageContainer> findChildContainers() {
         List<MessageContainer> sinks = new ArrayList<>();
@@ -459,7 +502,7 @@ public final class SpecializationData extends TemplateMethod {
                 if (cache.isEagerInitialize()) {
                     continue;
                 }
-                if (!cache.isAlwaysInitialized() || cache.isCachedContext() || cache.isCachedLanguage()) {
+                if (!cache.isAlwaysInitialized()) {
                     return true;
                 }
             }
@@ -534,7 +577,7 @@ public final class SpecializationData extends TemplateMethod {
         if (getMethod() == null) {
             return -1;
         }
-        return index - 1;
+        return index;
     }
 
     public NodeData getNode() {
@@ -547,10 +590,6 @@ public final class SpecializationData extends TemplateMethod {
 
     public boolean isFallback() {
         return kind == SpecializationKind.FALLBACK;
-    }
-
-    public boolean isUninitialized() {
-        return kind == SpecializationKind.UNINITIALIZED;
     }
 
     public List<SpecializationThrowsData> getExceptions() {

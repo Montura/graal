@@ -114,7 +114,7 @@ public class Linker {
         // Some Truffle configurations allow that the code gets compiled before executing the code.
         // We therefore check the link state again.
         if (entryPointInstance.isNonLinked()) {
-            final WasmContext context = WasmContext.getCurrent();
+            final WasmContext context = WasmContext.get(null);
             Map<String, WasmInstance> instances = context.moduleInstances();
             ArrayList<Throwable> failures = new ArrayList<>();
             runLinkActions(context, instances, failures);
@@ -156,20 +156,14 @@ public class Linker {
     }
 
     private static void assignTypeEquivalenceClasses() {
-        final Map<String, WasmInstance> instances = WasmContext.getCurrent().moduleInstances();
-        final Map<FunctionType, Integer> equivalenceClasses = new HashMap<>();
-        int nextEquivalenceClass = SymbolTable.FIRST_EQUIVALENCE_CLASS;
+        final WasmContext context = WasmContext.get(null);
+        final Map<String, WasmInstance> instances = context.moduleInstances();
         for (WasmInstance instance : instances.values()) {
             if (instance.isLinkInProgress() && !instance.module().isParsed()) {
                 final SymbolTable symtab = instance.symbolTable();
                 for (int index = 0; index < symtab.typeCount(); index++) {
                     FunctionType type = symtab.typeAt(index);
-                    Integer equivalenceClass = equivalenceClasses.get(type);
-                    if (equivalenceClass == null) {
-                        equivalenceClass = nextEquivalenceClass;
-                        equivalenceClasses.put(type, equivalenceClass);
-                        nextEquivalenceClass++;
-                    }
+                    Integer equivalenceClass = context.equivalenceClassFor(type);
                     symtab.setEquivalenceClass(index, equivalenceClass);
                 }
                 for (int index = 0; index < symtab.numFunctions(); index++) {
@@ -263,25 +257,9 @@ public class Linker {
     void resolveGlobalInitialization(WasmContext context, WasmInstance instance, int globalIndex, int sourceGlobalIndex) {
         final Runnable resolveAction = () -> {
             final int sourceAddress = instance.globalAddress(sourceGlobalIndex);
-            final byte type = instance.symbolTable().globalValueType(sourceGlobalIndex);
             final int address = instance.globalAddress(globalIndex);
             final GlobalRegistry globals = context.globals();
-            switch (type) {
-                case WasmType.I32_TYPE:
-                    globals.storeInt(address, globals.loadAsInt(sourceAddress));
-                    break;
-                case WasmType.I64_TYPE:
-                    globals.storeLong(address, globals.loadAsLong(sourceAddress));
-                    break;
-                case WasmType.F32_TYPE:
-                    globals.storeFloat(address, globals.loadAsFloat(sourceAddress));
-                    break;
-                case WasmType.F64_TYPE:
-                    globals.storeDouble(address, globals.loadAsDouble(sourceAddress));
-                    break;
-                default:
-                    throw WasmException.create(Failure.UNSPECIFIED_INTERNAL);
-            }
+            globals.storeLong(address, globals.loadAsLong(sourceAddress));
         };
         final Sym[] dependencies = new Sym[]{new InitializeGlobalSym(instance.name(), sourceGlobalIndex)};
         resolutionDag.resolveLater(new InitializeGlobalSym(instance.name(), globalIndex), dependencies, resolveAction);
@@ -296,17 +274,18 @@ public class Linker {
                                 "The module '" + function.importedModuleName() + "', referenced by the import '" + function.importedFunctionName() + "' in the module '" + instance.name() +
                                                 "', does not exist.");
             }
-            WasmFunction importedFunction;
-            importedFunction = importedInstance.module().exportedFunctions().get(function.importedFunctionName());
+            WasmFunction importedFunction = importedInstance.module().exportedFunctions().get(function.importedFunctionName());
             if (importedFunction == null) {
                 throw WasmException.create(Failure.UNKNOWN_IMPORT, "The imported function '" + function.importedFunctionName() + "', referenced in the module '" + instance.name() +
                                 "', does not exist in the imported module '" + function.importedModuleName() + "'.");
             }
-            final CallTarget target = importedInstance.target(importedFunction.index());
             if (!function.type().equals(importedFunction.type())) {
                 throw WasmException.create(Failure.INCOMPATIBLE_IMPORT_TYPE);
             }
+            final CallTarget target = importedInstance.target(importedFunction.index());
+            final WasmFunctionInstance functionInstance = importedInstance.functionInstance(importedFunction);
             instance.setTarget(function.index(), target);
+            instance.setFunctionInstance(function.index(), functionInstance);
         };
         final Sym[] dependencies = new Sym[]{new ExportFunctionSym(function.importDescriptor().moduleName, function.importDescriptor().memberName)};
         resolutionDag.resolveLater(new ImportFunctionSym(instance.name(), function.importDescriptor(), function.index()), dependencies, resolveAction);
@@ -322,7 +301,7 @@ public class Linker {
         final Runnable resolveAction = () -> block.resolveCallNode(controlTableOffset);
         final Sym[] dependencies = new Sym[]{
                         function.isImported() ? new ImportFunctionSym(instance.name(), function.importDescriptor(), function.index()) : new CodeEntrySym(instance.name(), function.index())};
-        resolutionDag.resolveLater(new CallsiteSym(instance.name(), block.startOfset(), controlTableOffset), dependencies, resolveAction);
+        resolutionDag.resolveLater(new CallsiteSym(instance.name(), block.startOffset(), controlTableOffset), dependencies, resolveAction);
     }
 
     void resolveCodeEntry(WasmModule module, int functionIndex) {
@@ -384,8 +363,8 @@ public class Linker {
                 baseAddress = offsetAddress;
             }
 
-            Assert.assertUnsignedIntLessOrEqual(baseAddress, memory.byteSize(), Failure.DATA_SEGMENT_DOES_NOT_FIT);
-            Assert.assertUnsignedIntLessOrEqual(baseAddress + byteLength, memory.byteSize(), Failure.DATA_SEGMENT_DOES_NOT_FIT);
+            Assert.assertUnsignedIntLessOrEqual(baseAddress, WasmMath.toUnsignedIntExact(memory.byteSize()), Failure.DATA_SEGMENT_DOES_NOT_FIT);
+            Assert.assertUnsignedIntLessOrEqual(baseAddress + byteLength, WasmMath.toUnsignedIntExact(memory.byteSize()), Failure.DATA_SEGMENT_DOES_NOT_FIT);
 
             for (int writeOffset = 0; writeOffset != byteLength; ++writeOffset) {
                 byte b = data[writeOffset];
@@ -485,8 +464,7 @@ public class Linker {
         for (int index = 0; index != functionsIndices.length; ++index) {
             final int functionIndex = functionsIndices[index];
             final WasmFunction function = instance.module().function(functionIndex);
-            final CallTarget target = instance.target(function.index());
-            table.initialize(baseAddress + index, new WasmFunctionInstance(function, target));
+            table.initialize(baseAddress + index, instance.functionInstance(function));
         }
     }
 

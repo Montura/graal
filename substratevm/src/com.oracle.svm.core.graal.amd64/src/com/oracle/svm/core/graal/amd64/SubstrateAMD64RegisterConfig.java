@@ -57,10 +57,12 @@ import static jdk.vm.ci.amd64.AMD64.xmm9;
 
 import java.util.ArrayList;
 
-import com.oracle.svm.core.OS;
+import org.graalvm.nativeimage.Platform;
+
 import com.oracle.svm.core.ReservedRegisters;
 import com.oracle.svm.core.config.ObjectLayout;
 import com.oracle.svm.core.graal.code.SubstrateCallingConvention;
+import com.oracle.svm.core.graal.code.SubstrateCallingConventionKind;
 import com.oracle.svm.core.graal.code.SubstrateCallingConventionType;
 import com.oracle.svm.core.graal.meta.SubstrateRegisterConfig;
 import com.oracle.svm.core.util.VMError;
@@ -101,7 +103,7 @@ public class SubstrateAMD64RegisterConfig implements SubstrateRegisterConfig {
         this.metaAccess = metaAccess;
         this.useBasePointer = useBasePointer;
 
-        if (OS.getCurrent() == OS.WINDOWS) {
+        if (Platform.includedIn(Platform.WINDOWS.class)) {
             // This is the Windows 64-bit ABI for parameters.
             // Note that float parameters also "consume" a general register and vice versa.
             nativeGeneralParameterRegs = new RegisterArray(rcx, rdx, r8, r9);
@@ -146,7 +148,7 @@ public class SubstrateAMD64RegisterConfig implements SubstrateRegisterConfig {
                  * rbp must be last in the list, so that it gets the location closest to the saved
                  * return address.
                  */
-                if (OS.getCurrent() == OS.WINDOWS) {
+                if (Platform.includedIn(Platform.WINDOWS.class)) {
                     calleeSaveRegisters = new RegisterArray(rbx, rdi, rsi, r12, r13, r14, r15, rbp,
                                     xmm6, xmm7, xmm8, xmm9, xmm10, xmm11, xmm12, xmm13, xmm14, xmm15);
                 } else {
@@ -209,22 +211,7 @@ public class SubstrateAMD64RegisterConfig implements SubstrateRegisterConfig {
 
     @Override
     public RegisterArray getCallingConventionRegisters(Type t, JavaKind kind) {
-        SubstrateCallingConventionType type = (SubstrateCallingConventionType) t;
-        switch (kind) {
-            case Boolean:
-            case Byte:
-            case Short:
-            case Char:
-            case Int:
-            case Long:
-            case Object:
-                return (type.nativeABI ? nativeGeneralParameterRegs : javaGeneralParameterRegs);
-            case Float:
-            case Double:
-                return xmmParameterRegs;
-            default:
-                throw VMError.shouldNotReachHere();
-        }
+        throw VMError.unimplemented();
     }
 
     public boolean shouldUseBasePointer() {
@@ -234,7 +221,7 @@ public class SubstrateAMD64RegisterConfig implements SubstrateRegisterConfig {
     @Override
     public CallingConvention getCallingConvention(Type t, JavaType returnType, JavaType[] parameterTypes, ValueKindFactory<?> valueKindFactory) {
         SubstrateCallingConventionType type = (SubstrateCallingConventionType) t;
-        boolean isEntryPoint = type.nativeABI && !type.outgoing;
+        boolean isEntryPoint = type.nativeABI() && !type.outgoing;
 
         AllocatableValue[] locations = new AllocatableValue[parameterTypes.length];
 
@@ -245,46 +232,62 @@ public class SubstrateAMD64RegisterConfig implements SubstrateRegisterConfig {
          * We have to reserve a slot between return address and outgoing parameters for the deopt
          * frame handle. Exception: calls to native methods.
          */
-        int currentStackOffset = (type.nativeABI ? nativeParamsStackOffset : target.wordSize);
+        int currentStackOffset = (type.nativeABI() ? nativeParamsStackOffset : target.wordSize);
 
         JavaKind[] kinds = new JavaKind[locations.length];
         for (int i = 0; i < parameterTypes.length; i++) {
             JavaKind kind = ObjectLayout.getCallSignatureKind(isEntryPoint, (ResolvedJavaType) parameterTypes[i], metaAccess, target);
             kinds[i] = kind;
 
-            if (type.nativeABI && OS.getCurrent() == OS.WINDOWS) {
+            if (type.nativeABI() && Platform.includedIn(Platform.WINDOWS.class)) {
                 // Strictly positional: float parameters consume a general register and vice versa
                 currentGeneral = i;
                 currentXMM = i;
             }
-            switch (kind) {
-                case Byte:
-                case Boolean:
-                case Short:
-                case Char:
-                case Int:
-                case Long:
-                case Object:
-                    if (currentGeneral < (type.nativeABI ? nativeGeneralParameterRegs.size() : javaGeneralParameterRegs.size())) {
-                        Register register = (type.nativeABI ? nativeGeneralParameterRegs.get(currentGeneral++) : javaGeneralParameterRegs.get(currentGeneral++));
-                        locations[i] = register.asValue(valueKindFactory.getValueKind(kind.getStackKind()));
-                    }
-                    break;
-                case Float:
-                case Double:
-                    if (currentXMM < xmmParameterRegs.size()) {
-                        Register register = xmmParameterRegs.get(currentXMM++);
-                        locations[i] = register.asValue(valueKindFactory.getValueKind(kind));
-                    }
-                    break;
-                default:
-                    throw VMError.shouldNotReachHere();
+            Register register = null;
+            if (type.kind == SubstrateCallingConventionKind.ForwardReturnValue) {
+                VMError.guarantee(i == 0, "Method with calling convention ForwardReturnValue cannot have more than one parameter");
+                register = getReturnRegister(kind);
+            } else {
+                switch (kind) {
+                    case Byte:
+                    case Boolean:
+                    case Short:
+                    case Char:
+                    case Int:
+                    case Long:
+                    case Object:
+                        RegisterArray registers = type.nativeABI() ? nativeGeneralParameterRegs : javaGeneralParameterRegs;
+                        if (currentGeneral < registers.size()) {
+                            register = registers.get(currentGeneral++);
+                        }
+                        break;
+                    case Float:
+                    case Double:
+                        if (currentXMM < xmmParameterRegs.size()) {
+                            register = xmmParameterRegs.get(currentXMM++);
+                        }
+                        break;
+                    default:
+                        throw VMError.shouldNotReachHere();
+                }
             }
 
-            if (locations[i] == null) {
-                ValueKind<?> valueKind = valueKindFactory.getValueKind(kind.getStackKind());
-                locations[i] = StackSlot.get(valueKind, currentStackOffset, !type.outgoing);
-                currentStackOffset += Math.max(valueKind.getPlatformKind().getSizeInBytes(), target.wordSize);
+            /*
+             * The AMD64 ABI does not specify whether subword (i.e., boolean, byte, char, short)
+             * values should be extended to 32 bits. Hence, for incoming native calls, we can only
+             * assume the bits sizes as specified in the standard.
+             *
+             * Since within the graal compiler subwords are already extended to 32 bits, we save
+             * extended values in outgoing calls. Note that some compilers also expect arguments to
+             * be extended (https://reviews.llvm.org/rG1db979bae832563efde2523bb36ddabad43293d8).
+             */
+            ValueKind<?> paramValueKind = valueKindFactory.getValueKind(isEntryPoint ? kind : kind.getStackKind());
+            if (register != null) {
+                locations[i] = register.asValue(paramValueKind);
+            } else {
+                locations[i] = StackSlot.get(paramValueKind, currentStackOffset, !type.outgoing);
+                currentStackOffset += Math.max(paramValueKind.getPlatformKind().getSizeInBytes(), target.wordSize);
             }
         }
 

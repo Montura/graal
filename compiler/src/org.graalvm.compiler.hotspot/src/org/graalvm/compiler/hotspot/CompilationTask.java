@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -48,6 +48,7 @@ import org.graalvm.compiler.debug.DebugDumpScope;
 import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.debug.TimerKey;
 import org.graalvm.compiler.nodes.StructuredGraph;
+import org.graalvm.compiler.nodes.spi.StableProfileProvider;
 import org.graalvm.compiler.options.OptionKey;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.printer.GraalDebugHandlersFactory;
@@ -60,7 +61,10 @@ import jdk.vm.ci.hotspot.HotSpotInstalledCode;
 import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
 import jdk.vm.ci.hotspot.HotSpotNmethod;
 import jdk.vm.ci.hotspot.HotSpotResolvedJavaMethod;
+import jdk.vm.ci.meta.JavaType;
 import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaType;
+import jdk.vm.ci.meta.Signature;
 import jdk.vm.ci.runtime.JVMCICompiler;
 
 public class CompilationTask {
@@ -78,7 +82,8 @@ public class CompilationTask {
      */
     private final boolean installAsDefault;
 
-    private final boolean useProfilingInfo;
+    private final StableProfileProvider profileProvider;
+
     private final boolean shouldRetainLocalVariables;
 
     final class HotSpotCompilationWrapper extends CompilationWrapper<HotSpotCompilationRequestResult> {
@@ -168,8 +173,8 @@ public class CompilationTask {
 
             StructuredGraph graph;
             try (DebugContext.Scope s = debug.scope("Compiling", new DebugDumpScope(getIdString(), true))) {
-                graph = compiler.createGraph(method, entryBCI, useProfilingInfo, compilationId, debug.getOptions(), debug);
-                result = compiler.compile(graph, method, entryBCI, useProfilingInfo, shouldRetainLocalVariables, compilationId, debug);
+                graph = compiler.createGraph(method, entryBCI, profileProvider, compilationId, debug.getOptions(), debug);
+                result = compiler.compile(graph, shouldRetainLocalVariables, compilationId, debug);
             } catch (Throwable e) {
                 throw debug.handle(e);
             }
@@ -213,7 +218,7 @@ public class CompilationTask {
         this.jvmciRuntime = jvmciRuntime;
         this.compiler = compiler;
         this.compilationId = new HotSpotCompilationIdentifier(request);
-        this.useProfilingInfo = useProfilingInfo;
+        this.profileProvider = useProfilingInfo ? new StableProfileProvider() : null;
         this.shouldRetainLocalVariables = shouldRetainLocalVariables;
         this.installAsDefault = installAsDefault;
     }
@@ -311,6 +316,27 @@ public class CompilationTask {
         }
     }
 
+    /**
+     * Resolves all types seen in the signature of the root method. This avoids weird situations
+     * where otherwise resolved types can be seen as unresolved due to inlining where the inlinee
+     * and caller methods were loaded by different class loaders.
+     */
+    private static void resolveTypesInSignature(ResolvedJavaMethod method) {
+        Signature sig = method.getSignature();
+        int max = sig.getParameterCount(false);
+        ResolvedJavaType accessingClass = method.getDeclaringClass();
+        for (int i = 0; i < max; i++) {
+            JavaType type = sig.getParameterType(i, accessingClass);
+            if (!(type instanceof ResolvedJavaType)) {
+                try {
+                    type.resolve(accessingClass);
+                } catch (LinkageError e) {
+                    // This should only ever happen in -Xcomp mode
+                }
+            }
+        }
+    }
+
     @SuppressWarnings("try")
     public HotSpotCompilationRequestResult runCompilation(DebugContext debug) {
         HotSpotGraalRuntimeProvider graalRuntime = compiler.getGraalRuntime();
@@ -318,6 +344,8 @@ public class CompilationTask {
         int entryBCI = getEntryBCI();
         boolean isOSR = entryBCI != JVMCICompiler.INVOCATION_ENTRY_BCI;
         HotSpotResolvedJavaMethod method = getMethod();
+
+        resolveTypesInSignature(method);
 
         if (installAsDefault || isOSR) {
             // If there is already compiled code for this method on our level we simply return.

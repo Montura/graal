@@ -26,13 +26,11 @@ package com.oracle.svm.methodhandles;
 
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodType;
-// Checkstyle: stop
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
-// Checkstyle: resume
 import java.util.Arrays;
 
 import com.oracle.svm.core.SubstrateUtil;
@@ -40,20 +38,18 @@ import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
-import com.oracle.svm.core.invoke.MethodHandleUtils.MethodHandlesSupported;
+import com.oracle.svm.core.invoke.MethodHandleUtils;
 import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
+import com.oracle.svm.core.reflect.SubstrateMethodAccessor;
 import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.reflect.helpers.InvokeSpecialReflectionProxy;
 import com.oracle.svm.reflect.target.Target_java_lang_reflect_AccessibleObject;
 import com.oracle.svm.reflect.target.Target_java_lang_reflect_Method;
 import com.oracle.svm.reflect.target.Target_jdk_internal_reflect_MethodAccessor;
 
-// Checkstyle: stop
 import sun.invoke.util.ValueConversions;
 import sun.invoke.util.Wrapper;
-// Checkstyle: resume
 
-@TargetClass(className = "java.lang.invoke.MethodHandle", onlyWith = MethodHandlesSupported.class)
+@TargetClass(className = "java.lang.invoke.MethodHandle")
 final class Target_java_lang_invoke_MethodHandle {
 
     /**
@@ -75,15 +71,17 @@ final class Target_java_lang_invoke_MethodHandle {
     @Substitute(polymorphicSignature = true)
     Object invokeBasic(Object... args) throws Throwable {
         Target_java_lang_invoke_MemberName memberName = internalMemberName();
+        Object ret;
         if (memberName != null) { /* Direct method handle */
-            return Util_java_lang_invoke_MethodHandle.invokeInternal(memberName, type, args);
+            ret = Util_java_lang_invoke_MethodHandle.invokeInternal(memberName, type, args);
         } else { /* Interpretation mode */
             Target_java_lang_invoke_LambdaForm form = internalForm();
             Object[] interpreterArguments = new Object[args.length + 1];
             interpreterArguments[0] = this;
             System.arraycopy(args, 0, interpreterArguments, 1, args.length);
-            return form.interpretWithArguments(interpreterArguments);
+            ret = form.interpretWithArguments(interpreterArguments);
         }
+        return MethodHandleUtils.cast(ret, type.returnType());
     }
 
     @Substitute(polymorphicSignature = true)
@@ -126,7 +124,7 @@ final class Util_java_lang_invoke_MethodHandle {
         if (hasReceiver) {
             methodType = methodType.insertParameterTypes(0, memberName.getDeclaringClass());
         }
-        return invokeInternal(memberName, methodType, Arrays.copyOf(args, args.length - 1));
+        return MethodHandleUtils.cast(invokeInternal(memberName, methodType, Arrays.copyOf(args, args.length - 1)), methodType.returnType());
     }
 
     static Object invokeInternal(Target_java_lang_invoke_MemberName memberName, MethodType methodType, Object... args) throws Throwable {
@@ -214,7 +212,7 @@ final class Util_java_lang_invoke_MethodHandle {
                         Object[] invokeArgs = Arrays.copyOfRange(args, 1, args.length);
                         if (memberName.getReferenceKind() == Target_java_lang_invoke_MethodHandleNatives_Constants.REF_invokeSpecial) {
                             Target_jdk_internal_reflect_MethodAccessor accessor = SubstrateUtil.cast(method, Target_java_lang_reflect_Method.class).acquireMethodAccessor();
-                            return SubstrateUtil.cast(accessor, InvokeSpecialReflectionProxy.class).invokeSpecial(receiver, invokeArgs);
+                            return SubstrateUtil.cast(accessor, SubstrateMethodAccessor.class).invokeSpecial(receiver, invokeArgs);
                         } else {
                             return method.invoke(receiver, invokeArgs);
                         }
@@ -230,10 +228,10 @@ final class Util_java_lang_invoke_MethodHandle {
     }
 }
 
-@TargetClass(className = "java.lang.invoke.MethodHandleImpl", onlyWith = MethodHandlesSupported.class)
+@TargetClass(className = "java.lang.invoke.MethodHandleImpl")
 final class Target_java_lang_invoke_MethodHandleImpl {
 }
 
-@TargetClass(className = "java.lang.invoke.MethodHandleImpl", innerClass = "ArrayAccessor", onlyWith = MethodHandlesSupported.class)
+@TargetClass(className = "java.lang.invoke.MethodHandleImpl", innerClass = "ArrayAccessor")
 final class Target_java_lang_invoke_MethodHandleImpl_ArrayAccessor {
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,6 +31,8 @@ import java.io.CharArrayWriter;
 import java.io.PrintWriter;
 import java.lang.annotation.Annotation;
 import java.lang.invoke.MethodHandle;
+import java.nio.file.FileSystems;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -46,6 +48,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.logging.Level;
+import java.util.stream.Collectors;
 
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.UnmodifiableEconomicMap;
@@ -57,7 +60,6 @@ import org.graalvm.compiler.truffle.common.TruffleCompiler;
 import org.graalvm.compiler.truffle.common.TruffleCompilerRuntime;
 import org.graalvm.compiler.truffle.common.TruffleDebugContext;
 import org.graalvm.compiler.truffle.common.TruffleDebugJavaMethod;
-import org.graalvm.compiler.truffle.common.TruffleMetaAccessProvider;
 import org.graalvm.compiler.truffle.common.TruffleOutputGroup;
 import org.graalvm.compiler.truffle.options.PolyglotCompilerOptions;
 import org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.ExceptionAction;
@@ -82,7 +84,6 @@ import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
-import com.oracle.truffle.api.CompilerOptions;
 import com.oracle.truffle.api.ExactMath;
 import com.oracle.truffle.api.HostCompilerDirectives.BytecodeInterpreterSwitch;
 import com.oracle.truffle.api.HostCompilerDirectives.BytecodeInterpreterSwitchBoundary;
@@ -96,11 +97,12 @@ import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.FrameInstanceVisitor;
-import com.oracle.truffle.api.frame.FrameSlot;
 import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.impl.AbstractAssumption;
+import com.oracle.truffle.api.impl.AbstractFastThreadLocal;
+import com.oracle.truffle.api.impl.FrameWithoutBoxing;
 import com.oracle.truffle.api.impl.TVMCI;
 import com.oracle.truffle.api.impl.ThreadLocalHandshake;
 import com.oracle.truffle.api.nodes.DirectCallNode;
@@ -117,6 +119,7 @@ import com.oracle.truffle.api.nodes.UnexpectedResultException;
 import com.oracle.truffle.api.object.LayoutFactory;
 import com.oracle.truffle.api.profiles.BranchProfile;
 import com.oracle.truffle.api.profiles.ConditionProfile;
+import com.oracle.truffle.api.source.SourceSection;
 
 import jdk.vm.ci.code.BailoutException;
 import jdk.vm.ci.code.stack.InspectedFrame;
@@ -139,7 +142,6 @@ import jdk.vm.ci.services.Services;
 public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleCompilerRuntime {
 
     private static final int JAVA_SPECIFICATION_VERSION = getJavaSpecificationVersion();
-    private static final boolean Java8OrEarlier = JAVA_SPECIFICATION_VERSION <= 8;
 
     /**
      * Used only to reset state for native image compilation.
@@ -182,9 +184,8 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
         this.floodControlHandler = loadGraalRuntimeServiceProvider(FloodControlHandler.class, null, false);
     }
 
-    @Override
-    public TruffleMetaAccessProvider createInliningPlan() {
-        return new TruffleInlining();
+    public boolean isLatestJVMCI() {
+        return true;
     }
 
     public abstract ThreadLocalHandshake getThreadLocalHandshake();
@@ -370,6 +371,7 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
         }
     }
 
+    @SuppressWarnings("deprecation")
     private static UnmodifiableEconomicMap<String, Class<?>> initLookupTypes(Iterable<Class<?>> extraTypes) {
         EconomicMap<String, Class<?>> m = EconomicMap.create();
         for (Class<?> c : new Class<?>[]{
@@ -381,13 +383,12 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
                         OptimizedDirectCallNode.class,
                         OptimizedAssumption.class,
                         CompilerDirectives.class,
-                        GraalCompilerDirectives.class,
                         InlineDecision.class,
                         CompilerAsserts.class,
                         ExactMath.class,
                         ArrayUtils.class,
                         FrameDescriptor.class,
-                        FrameSlot.class,
+                        com.oracle.truffle.api.frame.FrameSlot.class,
                         FrameSlotKind.class,
                         MethodHandle.class,
                         ArrayList.class,
@@ -398,7 +399,8 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
                         BranchProfile.class,
                         ConditionProfile.class,
                         Objects.class,
-                        TruffleSafepoint.class
+                        TruffleSafepoint.class,
+                        BaseOSRRootNode.class
         }) {
             m.put(c.getName(), c);
         }
@@ -419,9 +421,20 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
                 throw new NoClassDefFoundError(className);
             }
         }
+        String className = "com.oracle.truffle.api.strings.TStringOps";
+        try {
+            Class<?> c = Class.forName(className);
+            m.put(c.getName(), c);
+        } catch (ClassNotFoundException e) {
+            throw new NoClassDefFoundError(className);
+        }
         return m;
     }
 
+    /*
+     * Make sure the libgraal version HSTruffleCompilerRuntime.resolveType of this method stays in
+     * sync with this method.
+     */
     @Override
     public ResolvedJavaType resolveType(MetaAccessProvider metaAccess, String className, boolean required) {
         Class<?> c = lookupTypes.get(className);
@@ -431,7 +444,11 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
             }
             throw new NoClassDefFoundError(className);
         }
-        return metaAccess.lookupJavaType(c);
+        ResolvedJavaType type = metaAccess.lookupJavaType(c);
+        // In some situations, we may need the class to be linked now, especially if we are
+        // compiling immediately (e.g., to successfully devirtualize FrameWithoutBoxing methods).
+        type.link();
+        return type;
     }
 
     protected void installDefaultListeners() {
@@ -476,7 +493,7 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
     }
 
     @Override
-    public DirectCallNode createDirectCallNode(CallTarget target) {
+    public final DirectCallNode createDirectCallNode(CallTarget target) {
         if (target instanceof OptimizedCallTarget) {
             OptimizedCallTarget optimizedTarget = (OptimizedCallTarget) target;
             final OptimizedDirectCallNode directCallNode = new OptimizedDirectCallNode(optimizedTarget);
@@ -488,50 +505,66 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
     }
 
     @Override
-    public IndirectCallNode createIndirectCallNode() {
+    public final IndirectCallNode createIndirectCallNode() {
         return new OptimizedIndirectCallNode();
     }
 
     @Override
-    public VirtualFrame createVirtualFrame(Object[] arguments, FrameDescriptor frameDescriptor) {
+    public final VirtualFrame createVirtualFrame(Object[] arguments, FrameDescriptor frameDescriptor) {
         return OptimizedCallTarget.createFrame(frameDescriptor, arguments);
     }
 
     @Override
-    public MaterializedFrame createMaterializedFrame(Object[] arguments) {
+    public final MaterializedFrame createMaterializedFrame(Object[] arguments) {
         return createMaterializedFrame(arguments, new FrameDescriptor());
     }
 
     @Override
-    public MaterializedFrame createMaterializedFrame(Object[] arguments, FrameDescriptor frameDescriptor) {
+    public final MaterializedFrame createMaterializedFrame(Object[] arguments, FrameDescriptor frameDescriptor) {
         return new FrameWithoutBoxing(frameDescriptor, arguments);
     }
 
     @Override
-    public CompilerOptions createCompilerOptions() {
-        return new GraalCompilerOptions();
-    }
-
-    @Override
-    public Assumption createAssumption() {
+    public final Assumption createAssumption() {
         return createAssumption(null);
     }
 
     @Override
-    public Assumption createAssumption(String name) {
+    public final Assumption createAssumption(String name) {
         return new OptimizedAssumption(name);
     }
 
-    public GraalTruffleRuntimeListener getListener() {
+    public final GraalTruffleRuntimeListener getListener() {
         return listeners;
     }
 
     @TruffleBoundary
     @Override
-    public <T> T iterateFrames(final FrameInstanceVisitor<T> visitor) {
-        return iterateImpl(visitor, 0);
+    public final <T> T iterateFrames(FrameInstanceVisitor<T> visitor, int skipFrames) {
+        if (skipFrames < 0) {
+            throw new IllegalArgumentException("The skipFrames parameter must be >= 0.");
+        }
+        return iterateImpl(visitor, skipFrames);
     }
 
+    /**
+     * The compilation threshold scale is a real number. We use an integer which we treat as a fixed
+     * point value for performance reasons.
+     */
+    private int compilationThresholdScale = FixedPointMath.toFixedPoint(1.0);
+
+    public final int compilationThresholdScale() {
+        return compilationThresholdScale;
+    }
+
+    final void setCompilationThresholdScale(int scale) {
+        this.compilationThresholdScale = scale;
+    }
+
+    /**
+     * This class visits native frames in order to construct Truffle {@link FrameInstance
+     * FrameInstances}, which it passes to the provided {@link FrameInstanceVisitor}.
+     */
     private static final class FrameVisitor<T> implements InspectedFrameVisitor<T> {
 
         private final FrameInstanceVisitor<T> visitor;
@@ -540,6 +573,7 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
         private int skipFrames;
 
         private InspectedFrame callNodeFrame;
+        private InspectedFrame osrFrame;
 
         FrameVisitor(FrameInstanceVisitor<T> visitor, CallMethods methods, int skip) {
             this.visitor = visitor;
@@ -547,27 +581,79 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
             this.skipFrames = skip;
         }
 
+        /**
+         * A Truffle {@link FrameInstance} logically consists of three components: a
+         * {@link com.oracle.truffle.api.frame.Frame frame}, a {@link CallTarget call target}, and a
+         * {@link Node call node}. These objects are spread across multiple native
+         * {@link InspectedFrame InspectedFrames}, so this visitor remembers previously-seen native
+         * frames (as necessary) in order to construct Truffle {@link FrameInstance FrameInstances}.
+         *
+         * For example, consider this sample stack trace:
+         *
+         * <pre>
+         *  ... -> executeRootNode(A) -> callDirect -> executeRootNode(B) -> callDirect -> executeRootNode(C)
+         *        (call target, frame)  (call node)   (call target, frame)  (call node)   (call target, frame)
+         *                |__________________|                |__________________|                |
+         *                  FrameInstance(A)                    FrameInstance(B)           FrameInstance(C)
+         * </pre>
+         *
+         * Method C is at the top of the stack (it has not called another guest method). Thus, it
+         * does not have a call node. Its call target and frame are the first two parameters of
+         * executeRootNode(C) {@link InspectedFrame}, so we can construct a {@link FrameInstance}
+         * using this frame.
+         *
+         * Down the stack, method B calls C, so it does have a call node. This node is a parameter
+         * to the callDirect {@link InspectedFrame}, so we remember this frame and use it to
+         * construct a {@link FrameInstance} when we reach executeRootNode(B). We construct a
+         * {@link FrameInstance} for A the same way.
+         *
+         *
+         * OSR complicates things. Consider this sample stack trace:
+         *
+         * <pre>
+         *  ... -> executeRootNode(A) -> callOSR -> executeRootNode(A_OSR) -> callDirect -> ...
+         *      (non-OSR call target, _)               (_, new frame)         (call node)
+         *               |___________________________________|____________________|
+         *                                    FrameInstance(A)
+         * </pre>
+         *
+         * With OSR, the program state may be inconsistent between OSR and non-OSR frames. The OSR
+         * frame (executeRootNode(A_OSR)) contains the most up-to-date Truffle
+         * {@link com.oracle.truffle.api.frame.Frame}, so we remember it. OSR should be transparent,
+         * so the call target is obtained from the non-OSR frame (executeRootNode(A)).
+         */
         @Override
         public T visitFrame(InspectedFrame frame) {
-            if (frame.isMethod(methods.callOSRMethod)) {
-                // we ignore OSR frames.
-                skipFrames++;
-                return null;
-            } else if (frame.isMethod(methods.callTargetMethod)) {
-                if (skipFrames == 0) {
-                    try {
-                        return visitor.visitFrame(new GraalFrameInstance(frame, callNodeFrame));
-                    } finally {
-                        callNodeFrame = null;
-                    }
-                } else {
-                    skipFrames--;
-                }
-            } else if (frame.isMethod(methods.callDirectMethod) || frame.isMethod(methods.callIndirectMethod) || frame.isMethod(methods.callInlinedMethod) ||
+            if (frame.isMethod(methods.callDirectMethod) || frame.isMethod(methods.callIndirectMethod) || frame.isMethod(methods.callInlinedMethod) ||
                             frame.isMethod(methods.callInlinedCallMethod)) {
                 callNodeFrame = frame;
+                return null;
             }
-            return null;
+            assert frame.isMethod(methods.callTargetMethod);
+            if (isOSRFrame(frame)) {
+                if (skipFrames == 0 && osrFrame == null) {
+                    osrFrame = frame;
+                }
+                return null;
+            } else if (skipFrames > 0) {
+                skipFrames--;
+                return null;
+            } else {
+                try {
+                    if (osrFrame != null) {
+                        return visitor.visitFrame(new GraalOSRFrameInstance(frame, callNodeFrame, osrFrame));
+                    } else {
+                        return visitor.visitFrame(new GraalFrameInstance(frame, callNodeFrame));
+                    }
+                } finally {
+                    osrFrame = null;
+                    callNodeFrame = null;
+                }
+            }
+        }
+
+        private static boolean isOSRFrame(InspectedFrame frame) {
+            return ((OptimizedCallTarget) frame.getLocal(GraalFrameInstance.CALL_TARGET_INDEX)).getRootNode() instanceof BaseOSRRootNode;
         }
     }
 
@@ -580,23 +666,12 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
     protected abstract StackIntrospection getStackIntrospection();
 
     @Override
-    public FrameInstance getCallerFrame() {
-        return iterateImpl(frame -> frame, 1);
-    }
-
-    @TruffleBoundary
-    @Override
-    public FrameInstance getCurrentFrame() {
-        return iterateImpl(frame -> frame, 0);
-    }
-
-    @Override
     public <T> T getCapability(Class<T> capability) {
         if (capability == TVMCI.class) {
             return capability.cast(tvmci);
         } else if (capability == LayoutFactory.class) {
             LayoutFactory layoutFactory = loadObjectLayoutFactory();
-            GraalRuntimeAccessor.JDK.exportTo(layoutFactory.getClass());
+            ModuleUtil.exportTo(layoutFactory.getClass());
             return capability.cast(layoutFactory);
         } else if (capability == TVMCI.Test.class) {
             return capability.cast(getTestTvmci());
@@ -604,7 +679,7 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
         try {
             return loadServiceProvider(capability, false);
         } catch (ServiceConfigurationError e) {
-            // Happens on JDK 9 when a service type has not been exported to Graal
+            // Happens when a service type has not been exported to Graal
             // or Graal's module descriptor does not declare a use of capability.
             return null;
         }
@@ -613,33 +688,13 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
     public abstract SpeculationLog createSpeculationLog();
 
     @Override
+    @Deprecated(since = "22.0")
+    @SuppressWarnings("deprecation")
     public final RootCallTarget createCallTarget(RootNode rootNode) {
-        CompilerAsserts.neverPartOfCompilation();
-        final OptimizedCallTarget target = createClonedCallTarget(rootNode, null);
-        TruffleSplittingStrategy.newTargetCreated(target);
-        return target;
+        return rootNode.getCallTarget();
     }
 
-    public final OptimizedCallTarget createClonedCallTarget(RootNode rootNode, OptimizedCallTarget source) {
-        CompilerAsserts.neverPartOfCompilation();
-        OptimizedCallTarget target = createOptimizedCallTarget(source, rootNode);
-        GraalRuntimeAccessor.INSTRUMENT.onLoad(target.getRootNode());
-        if (target.engine.compileAOTOnCreate) {
-            if (target.prepareForAOT()) {
-                target.compile(true);
-            }
-        }
-        return target;
-    }
-
-    public final OptimizedCallTarget createOSRCallTarget(RootNode rootNode) {
-        CompilerAsserts.neverPartOfCompilation();
-        OptimizedCallTarget target = createOptimizedCallTarget(null, rootNode);
-        GraalRuntimeAccessor.INSTRUMENT.onLoad(target.getRootNode());
-        return target;
-    }
-
-    public abstract OptimizedCallTarget createOptimizedCallTarget(OptimizedCallTarget source, RootNode rootNode);
+    protected abstract OptimizedCallTarget createOptimizedCallTarget(OptimizedCallTarget source, RootNode rootNode);
 
     public void addListener(GraalTruffleRuntimeListener listener) {
         listeners.add(listener);
@@ -662,6 +717,8 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
     }
 
     protected final void doCompile(TruffleDebugContext debug, OptimizedCallTarget callTarget, TruffleCompilationTask task) {
+        Objects.requireNonNull(callTarget, "Cannot compile null call target.");
+        Objects.requireNonNull(task, "Compilation task required.");
         List<OptimizedCallTarget> oldBlockCompilations = callTarget.blockCompilations;
         if (oldBlockCompilations != null) {
             for (OptimizedCallTarget blockTarget : oldBlockCompilations) {
@@ -698,16 +755,16 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
                 if (debug == null) {
                     debug = compiler.openDebugContext(optionsMap, compilation);
                 }
-                TruffleInlining inlining = new TruffleInlining();
-                listeners.onCompilationStarted(callTarget, task.tier());
+                listeners.onCompilationStarted(callTarget, task);
                 compilationStarted = true;
                 try {
-                    compiler.doCompile(debug, compilation, optionsMap, inlining, task, listeners.isEmpty() ? null : listeners);
+                    compiler.doCompile(debug, compilation, optionsMap, task, listeners.isEmpty() ? null : listeners);
                 } finally {
                     if (initialDebug == null) {
                         debug.close();
                     }
                 }
+                TruffleInlining inlining = (TruffleInlining) task.inliningData();
                 truffleDump(callTarget, compiler, compilation, optionsMap, inlining);
                 inlining.dequeueTargets();
             }
@@ -748,7 +805,7 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
             }
         } finally {
             Supplier<String> serializedException = () -> CompilableTruffleAST.serializeException(t);
-            callTarget.onCompilationFailed(serializedException, isSuppressedFailure(callTarget, serializedException), false, false, false);
+            callTarget.onCompilationFailed(serializedException, isSuppressedTruffleRuntimeException(t) || isSuppressedFailure(callTarget, serializedException), false, false, false);
         }
     }
 
@@ -823,7 +880,8 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
     }
 
     public int getCompilationQueueSize() {
-        return getCompileQueue().getQueueSize();
+        BackgroundCompileQueue compileQueue = getCompileQueue();
+        return compileQueue == null ? 0 : compileQueue.getQueueSize();
     }
 
     /**
@@ -855,18 +913,14 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
 
     private static <T> List<ServiceLoader<T>> loadService(Class<T> service) {
         ServiceLoader<T> graalLoader = ServiceLoader.load(service, GraalTruffleRuntime.class.getClassLoader());
-        if (Java8OrEarlier) {
-            return Collections.singletonList(graalLoader);
-        } else {
-            /*
-             * The Graal module (i.e., jdk.internal.vm.compiler) is loaded by the platform class
-             * loader on JDK 9+. Its module dependencies such as Truffle are supplied via
-             * --module-path which means they are loaded by the app class loader. As such, we need
-             * to search the app class loader path as well.
-             */
-            ServiceLoader<T> appLoader = ServiceLoader.load(service, service.getClassLoader());
-            return Arrays.asList(graalLoader, appLoader);
-        }
+        /*
+         * The Graal module (i.e., jdk.internal.vm.compiler) is loaded by the platform class loader.
+         * Its module dependencies such as Truffle are supplied via --module-path which means they
+         * are loaded by the app class loader. As such, we need to search the app class loader path
+         * as well.
+         */
+        ServiceLoader<T> appLoader = ServiceLoader.load(service, service.getClassLoader());
+        return Arrays.asList(graalLoader, appLoader);
     }
 
     private static LayoutFactory selectObjectLayoutFactory(Iterable<? extends Iterable<LayoutFactory>> availableLayoutFactories) {
@@ -910,7 +964,6 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
         public final ResolvedJavaMethod callInlinedMethod;
         public final ResolvedJavaMethod callIndirectMethod;
         public final ResolvedJavaMethod callTargetMethod;
-        public final ResolvedJavaMethod callOSRMethod;
         public final ResolvedJavaMethod callInlinedCallMethod;
         public final ResolvedJavaMethod[] anyFrameMethod;
 
@@ -920,8 +973,7 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
             this.callInlinedMethod = metaAccess.lookupJavaMethod(GraalFrameInstance.CALL_INLINED);
             this.callInlinedCallMethod = metaAccess.lookupJavaMethod(GraalFrameInstance.CALL_INLINED_CALL);
             this.callTargetMethod = metaAccess.lookupJavaMethod(GraalFrameInstance.CALL_TARGET_METHOD);
-            this.callOSRMethod = metaAccess.lookupJavaMethod(GraalFrameInstance.CALL_OSR_METHOD);
-            this.anyFrameMethod = new ResolvedJavaMethod[]{callDirectMethod, callIndirectMethod, callInlinedMethod, callTargetMethod, callOSRMethod, callInlinedCallMethod};
+            this.anyFrameMethod = new ResolvedJavaMethod[]{callDirectMethod, callIndirectMethod, callInlinedMethod, callTargetMethod, callInlinedCallMethod};
         }
 
         public static CallMethods lookup(MetaAccessProvider metaAccess) {
@@ -984,7 +1036,6 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
         return FrameSlotKind.values().length;
     }
 
-    @SuppressWarnings("deprecation")
     @Override
     public InlineKind getInlineKind(ResolvedJavaMethod original, boolean duringPartialEvaluation) {
         TruffleBoundary truffleBoundary = getAnnotation(TruffleBoundary.class, original);
@@ -1008,6 +1059,15 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
             return InlineKind.DO_NOT_INLINE_WITH_EXCEPTION;
         }
         return InlineKind.INLINE;
+    }
+
+    @Override
+    public boolean isInlineable(ResolvedJavaMethod method) {
+        /*
+         * Ensure that methods excluded from inlining are also never inlined during Truffle
+         * compilation.
+         */
+        return method.canBeInlined();
     }
 
     @Override
@@ -1038,6 +1098,17 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
     @Override
     public boolean isSuppressedFailure(CompilableTruffleAST compilable, Supplier<String> serializedException) {
         return floodControlHandler != null && floodControlHandler.isSuppressedFailure(compilable, serializedException);
+    }
+
+    /**
+     * Allows {@link GraalTruffleRuntime} subclasses to suppress exceptions such as an exception
+     * thrown during VM exit. Unlike {@link #isSuppressedFailure(CompilableTruffleAST, Supplier)}
+     * this method is called only for exceptions thrown on the Truffle runtime side, so it does not
+     * need to stringify the passed exception.
+     */
+    @SuppressWarnings("unused")
+    protected boolean isSuppressedTruffleRuntimeException(Throwable throwable) {
+        return false;
     }
 
     // https://bugs.openjdk.java.net/browse/JDK-8209535
@@ -1165,7 +1236,7 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
     }
 
     @SuppressWarnings("unused")
-    protected Object[] getNonPrimitiveResolvedFields(Class<?> type) {
+    protected Object[] getResolvedFields(Class<?> type, boolean includePrimitive, boolean includeSuperclasses) {
         throw new UnsupportedOperationException();
     }
 
@@ -1174,4 +1245,98 @@ public abstract class GraalTruffleRuntime implements TruffleRuntime, TruffleComp
         throw new UnsupportedOperationException();
     }
 
+    protected abstract AbstractFastThreadLocal getFastThreadLocalImpl();
+
+    public long getStackOverflowLimit() {
+        throw new UnsupportedOperationException();
+    }
+
+    public static class StackTraceHelper {
+        public static void logHostAndGuestStacktrace(String reason, OptimizedCallTarget callTarget) {
+            final int limit = callTarget.getOptionValue(PolyglotCompilerOptions.TraceStackTraceLimit);
+            final GraalTruffleRuntime runtime = GraalTruffleRuntime.getRuntime();
+            final StringBuilder messageBuilder = new StringBuilder();
+            messageBuilder.append(reason).append(" at\n");
+            runtime.iterateFrames(new FrameInstanceVisitor<Object>() {
+                int frameIndex = 0;
+
+                @Override
+                public Object visitFrame(FrameInstance frameInstance) {
+                    CallTarget target = frameInstance.getCallTarget();
+                    StringBuilder line = new StringBuilder("  ");
+                    if (frameIndex > 0) {
+                        line.append("  ");
+                    }
+                    line.append(formatStackFrame(frameInstance, target)).append("\n");
+                    frameIndex++;
+
+                    messageBuilder.append(line);
+                    if (frameIndex < limit) {
+                        return null;
+                    } else {
+                        messageBuilder.append("    ...\n");
+                        return frameInstance;
+                    }
+                }
+
+            });
+            final int skip = 3;
+            StackTraceElement[] stackTrace = new Throwable().getStackTrace();
+            String suffix = stackTrace.length > skip + limit ? "\n    ..." : "";
+            messageBuilder.append(Arrays.stream(stackTrace).skip(skip).limit(limit).map(StackTraceElement::toString).collect(Collectors.joining("\n    ", "  ", suffix)));
+            runtime.log(callTarget, messageBuilder.toString());
+        }
+
+        private static String formatStackFrame(FrameInstance frameInstance, CallTarget target) {
+            StringBuilder builder = new StringBuilder();
+            if (target instanceof RootCallTarget) {
+                RootNode root = ((RootCallTarget) target).getRootNode();
+                String name = root.getName();
+                if (name == null) {
+                    builder.append("unnamed-root");
+                } else {
+                    builder.append(name);
+                }
+                Node callNode = frameInstance.getCallNode();
+                SourceSection sourceSection = null;
+                if (callNode != null) {
+                    sourceSection = callNode.getEncapsulatingSourceSection();
+                }
+                if (sourceSection == null) {
+                    sourceSection = root.getSourceSection();
+                }
+
+                if (sourceSection == null || sourceSection.getSource() == null) {
+                    builder.append("(Unknown)");
+                } else {
+                    builder.append("(").append(formatPath(sourceSection)).append(":").append(sourceSection.getStartLine()).append(")");
+                }
+
+                if (target instanceof OptimizedCallTarget) {
+                    OptimizedCallTarget callTarget = ((OptimizedCallTarget) target);
+                    if (callTarget.isSplit()) {
+                        builder.append(" <split-").append(Integer.toHexString(callTarget.hashCode())).append(">");
+                    }
+                }
+
+            } else {
+                builder.append(target.toString());
+            }
+            return builder.toString();
+        }
+
+        private static String formatPath(SourceSection sourceSection) {
+            if (sourceSection.getSource().getPath() != null) {
+                Path path = FileSystems.getDefault().getPath(".").toAbsolutePath();
+                Path filePath = FileSystems.getDefault().getPath(sourceSection.getSource().getPath()).toAbsolutePath();
+
+                try {
+                    return path.relativize(filePath).toString();
+                } catch (IllegalArgumentException e) {
+                    // relativization failed
+                }
+            }
+            return sourceSection.getSource().getName();
+        }
+    }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2017, Red Hat Inc. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -26,12 +26,14 @@
 
 package org.graalvm.compiler.core.aarch64;
 
+import org.graalvm.compiler.core.common.type.IntegerStamp;
+import org.graalvm.compiler.core.common.type.Stamp;
 import org.graalvm.compiler.graph.Node;
+import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.calc.SignExtendNode;
 import org.graalvm.compiler.nodes.calc.ZeroExtendNode;
 import org.graalvm.compiler.nodes.memory.ReadNode;
-import org.graalvm.compiler.nodes.memory.VolatileReadNode;
 import org.graalvm.compiler.phases.Phase;
 
 /**
@@ -47,11 +49,12 @@ public class AArch64ReadReplacementPhase extends Phase {
             if (node instanceof AArch64ReadNode) {
                 continue;
             }
-            if (node instanceof ReadNode && !(node instanceof VolatileReadNode)) {
+            if (node instanceof ReadNode && !((ReadNode) node).ordersMemoryAccesses()) {
                 ReadNode readNode = (ReadNode) node;
                 if (readNode.hasExactlyOneUsage()) {
+                    Stamp stamp = readNode.getAccessStamp(NodeView.DEFAULT);
                     Node usage = readNode.usages().first();
-                    if (usage instanceof ZeroExtendNode || usage instanceof SignExtendNode) {
+                    if ((usage instanceof ZeroExtendNode || usage instanceof SignExtendNode) && stamp instanceof IntegerStamp) {
                         AArch64ReadNode.replace(readNode);
                     }
                 }

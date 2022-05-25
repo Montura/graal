@@ -24,21 +24,46 @@
  */
 package com.oracle.svm.reflect.target;
 
-// Checkstyle: stop
 import java.lang.reflect.AccessibleObject;
-// Checkstyle: resume
+
+import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.annotate.Alias;
+import com.oracle.svm.core.annotate.Inject;
+import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
-import com.oracle.svm.core.jdk.JDK11OrLater;
+import com.oracle.svm.core.jdk.JDK11OrEarlier;
+import com.oracle.svm.core.jdk.JDK17OrLater;
+import com.oracle.svm.hosted.image.NativeImageCodeCache;
+import com.oracle.svm.reflect.hosted.ReflectionMetadataComputer;
+
+import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.ResolvedJavaField;
 
 @TargetClass(value = AccessibleObject.class)
 public final class Target_java_lang_reflect_AccessibleObject {
     @Alias //
     public boolean override;
 
-    @Alias //
-    @TargetElement(onlyWith = JDK11OrLater.class)
-    native Target_java_lang_reflect_AccessibleObject getRoot();
+    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
+    @TargetElement(onlyWith = JDK11OrEarlier.class) //
+    volatile Object securityCheckCache;
+
+    @Alias @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Reset) //
+    @TargetElement(onlyWith = JDK17OrLater.class) //
+    volatile Object accessCheckCache;
+
+    @Inject @RecomputeFieldValue(kind = RecomputeFieldValue.Kind.Custom, declClass = TypeAnnotationsComputer.class) //
+    byte[] typeAnnotations;
+
+    @Alias
+    native AccessibleObject getRoot();
+
+    static class TypeAnnotationsComputer extends ReflectionMetadataComputer {
+        @Override
+        public Object compute(MetaAccessProvider metaAccess, ResolvedJavaField original, ResolvedJavaField annotated, Object receiver) {
+            return ImageSingletons.lookup(NativeImageCodeCache.ReflectionMetadataEncoder.class).getTypeAnnotationsEncoding((AccessibleObject) receiver);
+        }
+    }
 }

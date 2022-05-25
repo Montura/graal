@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -66,17 +66,12 @@ public class InlinedGetterNode extends QuickNode {
     }
 
     @Override
-    public int execute(VirtualFrame frame, long[] primitives, Object[] refs) {
-        BytecodeNode root = getBytecodesNode();
+    public int execute(VirtualFrame frame) {
+        BytecodeNode root = getBytecodeNode();
         StaticObject receiver = field.isStatic()
                         ? field.getDeclaringKlass().tryInitializeAndGetStatics()
-                        : nullCheck(BytecodeNode.popObject(refs, top - 1));
-        return (getResultAt() - top) + getFieldNode.getField(frame, primitives, refs, root, receiver, getResultAt(), statementIndex);
-    }
-
-    @Override
-    public boolean producedForeignObject(Object[] refs) {
-        return field.getKind().isObject() && BytecodeNode.peekObject(refs, getResultAt()).isForeignObject();
+                        : nullCheck(BytecodeNode.popObject(frame, top - 1));
+        return (getResultAt() - top) + getFieldNode.getField(frame, root, receiver, getResultAt(), statementIndex);
     }
 
     private int getResultAt() {

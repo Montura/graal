@@ -24,8 +24,6 @@
  */
 package com.oracle.svm.core.jdk;
 
-/* Checkstyle: allow reflection */
-
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -83,6 +81,10 @@ public class JNIRegistrationUtil {
     protected static Optional<Class<?>> optionalClazz(FeatureAccess access, String className) {
         Class<?> classByName = access.findClassByName(className);
         return Optional.ofNullable(classByName);
+    }
+
+    protected static Optional<Method> optionalMethod(FeatureAccess access, String className, String methodName, Class<?>... parameterTypes) {
+        return Optional.ofNullable(ReflectionUtil.lookupMethod(true, clazz(access, className), methodName, parameterTypes));
     }
 
     protected static Method method(FeatureAccess access, String className, String methodName, Class<?>... parameterTypes) {

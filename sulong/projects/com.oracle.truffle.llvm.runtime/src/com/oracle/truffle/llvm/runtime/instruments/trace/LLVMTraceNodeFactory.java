@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2019, Oracle and/or its affiliates.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -29,10 +29,9 @@
  */
 package com.oracle.truffle.llvm.runtime.instruments.trace;
 
-import java.io.PrintStream;
+import com.oracle.truffle.api.CompilerAsserts;
 import java.util.Arrays;
 
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.EventContext;
@@ -41,31 +40,30 @@ import com.oracle.truffle.api.instrumentation.ExecutionEventNodeFactory;
 import com.oracle.truffle.api.instrumentation.StandardTags;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.SourceSection;
+import com.oracle.truffle.llvm.runtime.LLVMContext;
 
 final class LLVMTraceNodeFactory implements ExecutionEventNodeFactory {
 
-    private final PrintStream traceTarget;
     private final TraceContext traceContext;
 
-    LLVMTraceNodeFactory(PrintStream target) {
-        this.traceTarget = target;
+    LLVMTraceNodeFactory() {
         this.traceContext = new TraceContext();
     }
 
     @Override
     public ExecutionEventNode create(EventContext eventContext) {
+        CompilerAsserts.neverPartOfCompilation();
         if (eventContext.hasTag(StandardTags.RootTag.class)) {
             assert eventContext.getInstrumentedNode() != null;
             final RootNode rootNode = eventContext.getInstrumentedNode().getRootNode();
             assert rootNode != null;
             final SourceSection sourceSection = rootNode.getSourceSection();
-            return new RootTrace(traceContext, traceTarget, rootNode.getName(), toTraceLine(sourceSection, false));
+            return new RootTrace(traceContext, rootNode.getName(), toTraceLine(sourceSection, false));
 
         } else if (eventContext.hasTag(StandardTags.StatementTag.class)) {
-            return new StatementTrace(traceContext, traceTarget, toTraceLine(eventContext.getInstrumentedSourceSection(), true));
+            return new StatementTrace(traceContext, toTraceLine(eventContext.getInstrumentedSourceSection(), true));
 
         } else {
-            CompilerDirectives.transferToInterpreter();
             throw new IllegalStateException("Unknown node for tracing: " + eventContext.getInstrumentedNode());
         }
     }
@@ -116,26 +114,18 @@ final class LLVMTraceNodeFactory implements ExecutionEventNodeFactory {
     private abstract static class TraceNode extends ExecutionEventNode {
 
         private final TraceContext context;
-        private final PrintStream out;
 
-        TraceNode(TraceContext context, PrintStream out) {
+        TraceNode(TraceContext context) {
             this.context = context;
-            this.out = out;
         }
 
         @TruffleBoundary
         void trace(String message) {
-            out.print("[lli] ");
-            for (int i = 0; i < context.getStackDepth(); i++) {
-                out.print(TraceContext.STACK_DEPTH_INDENT);
-            }
-            out.print(' ');
-            out.println(message);
+            LLVMContext.traceIRLog(String.format("%s %s", TraceContext.STACK_DEPTH_INDENT.repeat(context.getStackDepth()), message));
         }
 
         @TruffleBoundary
         void flushTraceBuffer() {
-            out.flush();
         }
 
         TraceContext getTraceContext() {
@@ -147,8 +137,8 @@ final class LLVMTraceNodeFactory implements ExecutionEventNodeFactory {
 
         private final String location;
 
-        private StatementTrace(TraceContext context, PrintStream out, String location) {
-            super(context, out);
+        private StatementTrace(TraceContext context, String location) {
+            super(context);
             this.location = location;
         }
 
@@ -165,8 +155,8 @@ final class LLVMTraceNodeFactory implements ExecutionEventNodeFactory {
         private final String exceptionPrefix;
 
         @TruffleBoundary
-        RootTrace(TraceContext context, PrintStream out, String functionName, String sourceSection) {
-            super(context, out);
+        RootTrace(TraceContext context, String functionName, String sourceSection) {
+            super(context);
             this.enterPrefix = String.format("Entering function %s at %s with arguments:", functionName, sourceSection);
             this.exitPrefix = "Leaving " + functionName;
             this.exceptionPrefix = "Exceptionally leaving " + functionName;

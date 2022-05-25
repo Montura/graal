@@ -39,6 +39,9 @@ import org.graalvm.compiler.options.Option;
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.hosted.Feature;
 
+import com.oracle.graal.pointsto.reports.ReportUtils;
+import com.oracle.svm.core.ClassLoaderSupport;
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.graal.GraalFeature;
 import com.oracle.svm.core.option.APIOption;
@@ -128,6 +131,19 @@ public class FeatureHandler {
                 throw UserError.abort("Feature %s class not found on the classpath. Ensure that the name is correct and that the class is on the classpath.", featureName);
             }
         }
+        if (NativeImageOptions.PrintFeatures.getValue()) {
+            ReportUtils.report("feature information", SubstrateOptions.reportsPath(), "feature_info", "csv", out -> {
+                out.println("Feature, Required Features");
+                for (Feature featureInstance : featureInstances) {
+                    out.print(featureInstance.getClass().getTypeName());
+                    String requiredFeaturesString = featureInstance.getRequiredFeatures().stream()
+                                    .map(Class::getTypeName)
+                                    .collect(Collectors.joining(" ", "[", "]"));
+                    out.print(", ");
+                    out.println(requiredFeaturesString);
+                }
+            });
+        }
     }
 
     /**
@@ -178,5 +194,14 @@ public class FeatureHandler {
         }
 
         featureInstances.add(feature);
+    }
+
+    public List<String> getUserFeatureNames() {
+        ClassLoaderSupport classLoaderSupport = ImageSingletons.lookup(ClassLoaderSupport.class);
+        return featureInstances.stream()
+                        .filter(f -> classLoaderSupport.isNativeImageClassLoader(f.getClass().getClassLoader()))
+                        .map(f -> f.getClass().getName())
+                        .sorted()
+                        .collect(Collectors.toList());
     }
 }

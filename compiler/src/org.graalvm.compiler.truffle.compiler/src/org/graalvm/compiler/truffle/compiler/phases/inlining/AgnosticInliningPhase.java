@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,12 +30,12 @@ import java.util.Objects;
 
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.spi.CoreProviders;
-import org.graalvm.compiler.phases.BasePhase;
+import org.graalvm.compiler.phases.SingleRunSubphase;
 import org.graalvm.compiler.serviceprovider.GraalServices;
 import org.graalvm.compiler.truffle.compiler.PartialEvaluator;
 import org.graalvm.compiler.truffle.options.PolyglotCompilerOptions;
 
-public final class AgnosticInliningPhase extends BasePhase<CoreProviders> {
+public final class AgnosticInliningPhase extends SingleRunSubphase<CoreProviders> {
 
     private static final ArrayList<InliningPolicyProvider> POLICY_PROVIDERS;
 
@@ -51,6 +51,7 @@ public final class AgnosticInliningPhase extends BasePhase<CoreProviders> {
 
     private final PartialEvaluator partialEvaluator;
     private final PartialEvaluator.Request request;
+    private boolean rootIsLeaf;
 
     public AgnosticInliningPhase(PartialEvaluator partialEvaluator, PartialEvaluator.Request request) {
         this.partialEvaluator = partialEvaluator;
@@ -79,19 +80,29 @@ public final class AgnosticInliningPhase extends BasePhase<CoreProviders> {
     protected void run(StructuredGraph graph, CoreProviders coreProviders) {
         final InliningPolicy policy = getInliningPolicyProvider(request.isFirstTier()).get(request.options, coreProviders);
         final CallTree tree = new CallTree(partialEvaluator, request, policy);
+        rootIsLeaf = tree.getRoot().getChildren().isEmpty();
         tree.dumpBasic("Before Inline");
         if (optionsAllowInlining()) {
             policy.run(tree);
             tree.dumpBasic("After Inline");
-            tree.collectTargetsToDequeue(request.inliningPlan);
-            tree.updateTracingInfo(request.inliningPlan);
+            tree.collectTargetsToDequeue(request.task.inliningData());
+            tree.updateTracingInfo(request.task.inliningData());
         }
         tree.finalizeGraph();
         tree.trace();
     }
 
     private boolean optionsAllowInlining() {
-        return request.options.get(PolyglotCompilerOptions.Inlining) &&
-                        (request.options.get(PolyglotCompilerOptions.Mode) != PolyglotCompilerOptions.EngineModeEnum.LATENCY);
+        return request.options.get(PolyglotCompilerOptions.Inlining);
+    }
+
+    @Override
+    public boolean checkContract() {
+        // inlining per definition increases graph size a lot
+        return false;
+    }
+
+    public boolean rootIsLeaf() {
+        return rootIsLeaf;
     }
 }

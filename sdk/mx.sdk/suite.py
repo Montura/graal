@@ -39,10 +39,10 @@
 # SOFTWARE.
 #
 suite = {
-  "mxversion" : "5.282.0",
+  "mxversion" : "5.318.0",
   "name" : "sdk",
-  "version" : "21.1.0",
-  "release" : True,
+  "version" : "22.1.1.0",
+  "release" : False,
   "sourceinprojectwhitelist" : [],
   "url" : "https://github.com/oracle/graal",
   "groupId" : "org.graalvm.sdk",
@@ -78,15 +78,15 @@ suite = {
   "defaultLicense" : "UPL",
   "imports": {},
   "libraries" : {
-    "WRK": {
-      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/wrk.tar.gz"],
-      "sha1": "04b97d4d90b3d73dc3cd37b225d8aa3d6bca42da",
+    "WRK_MULTIARCH": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/wrk-a211dd5-multiarch.tar.gz"],
+      "sha1": "48f9df44d53b3fef8515e6d463a885aa00b5a954",
       "packedResource": True,
-      "license": "Apache-2.0",
+      "license": "Apache-2.0-wrk-a211dd5",
     },
-    "WRK2": {
-      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/wrk2.tar.gz"],
-      "sha1": "a5c417b414f72951de4eb95641808a0a5aa31445",
+    "WRK2_MULTIARCH": {
+      "urls": ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/wrk2-multiarch.tar.gz"],
+      "sha1": "04a75fe3362e3b708c0c44db81fa73029d9fb604",
       "packedResource": True,
       "license": "Apache-2.0",
     },
@@ -105,37 +105,73 @@ suite = {
       }
     },
     "JLINE3" : {
-      "sha1" : "4cb5f6c20b10912ef3c12f4c4c3ebcdbcbe3a555",
-      "version" : "3.16.0.1",
+      "sha1" : "bac1579375a67379d8f308016138f9c37a646dd5",
+      "version" : "3.16.0.2",
       "urls" : ["https://lafo.ssw.uni-linz.ac.at/pub/graal-external-deps/jline3-shadowed-{version}.jar"],
-      "license" : "BSD-new"
+      "license" : "BSD-new",
+      "requires" : ["java.logging"],
+      "exports" : [
+        "org.graalvm.shadowed.org.fusesource.hawtjni.runtime",
+        "org.graalvm.shadowed.org.fusesource.jansi",
+        "org.graalvm.shadowed.org.fusesource.jansi.internal",
+        "org.graalvm.shadowed.org.jline.builtins",
+        "org.graalvm.shadowed.org.jline.builtins.ssh",
+        "org.graalvm.shadowed.org.jline.builtins.telnet",
+        "org.graalvm.shadowed.org.jline.console",
+        "org.graalvm.shadowed.org.jline.console.impl",
+        "org.graalvm.shadowed.org.jline.keymap",
+        "org.graalvm.shadowed.org.jline.reader",
+        "org.graalvm.shadowed.org.jline.reader.impl",
+        "org.graalvm.shadowed.org.jline.reader.impl.completer",
+        "org.graalvm.shadowed.org.jline.reader.impl.history",
+        "org.graalvm.shadowed.org.jline.style",
+        "org.graalvm.shadowed.org.jline.terminal",
+        "org.graalvm.shadowed.org.jline.terminal.impl",
+        "org.graalvm.shadowed.org.jline.terminal.impl.jansi",
+        "org.graalvm.shadowed.org.jline.terminal.impl.jansi.freebsd",
+        "org.graalvm.shadowed.org.jline.terminal.impl.jansi.linux",
+        "org.graalvm.shadowed.org.jline.terminal.impl.jansi.osx",
+        "org.graalvm.shadowed.org.jline.terminal.impl.jansi.solaris",
+        "org.graalvm.shadowed.org.jline.terminal.impl.jansi.win",
+        "org.graalvm.shadowed.org.jline.terminal.impl.jna",
+        "org.graalvm.shadowed.org.jline.terminal.impl.jna.freebsd",
+        "org.graalvm.shadowed.org.jline.terminal.impl.jna.linux",
+        "org.graalvm.shadowed.org.jline.terminal.impl.jna.osx",
+        "org.graalvm.shadowed.org.jline.terminal.impl.jna.solaris",
+        "org.graalvm.shadowed.org.jline.terminal.impl.jna.win",
+        "org.graalvm.shadowed.org.jline.terminal.spi",
+        "org.graalvm.shadowed.org.jline.utils",
+        "org.graalvm.shadowed.org.jline.widget",
+      ],
     },
     "LLVM_ORG" : {
-      "version" : "10.0.0-5-g67b19b2aed-bgb23ce12f48",
+      "version" : "12.0.1-4-g44c3fb5080-bgbcb1638df0",
       "host" : "https://lafo.ssw.uni-linz.ac.at/pub/llvm-org",
       "os_arch" : {
         "linux" : {
           "amd64" : {
             "urls" : ["{host}/llvm-llvmorg-{version}-linux-amd64.tar.gz"],
-            "sha1" : "a342aa46f6a45d91c5dbda8cd42d4a493166babe",
+            "sha1" : "1ee6ef327b913d55dd63d6b9f387d3cc6dfb9b8f",
           },
           "aarch64" : {
             "urls" : ["{host}/llvm-llvmorg-{version}-linux-aarch64.tar.gz"],
-            "sha1" : "772d729ae66105ceeb647e8e69b3b6204dc9ff7b",
+            "sha1" : "4b46fff741736e137307ccba3ee30695413c9a34",
           }
         },
         "darwin" : {
           "amd64" : {
             "urls" : ["{host}/llvm-llvmorg-{version}-darwin-amd64.tar.gz"],
-            "sha1" : "3f0c7311c5bf3371ebf34cdd6a73f51c997ab9c2",
+            "sha1" : "8eb3596b43dd797f0f28d7d285a1c89e41c8da46",
+          },
+          "aarch64" : {
+            "urls" : ["{host}/llvm-llvmorg-{version}-darwin-aarch64.tar.gz"],
+            "sha1" : "5f08d4829bbd4baf5a5693553fc246e9c81cd7ce",
           }
         },
         "windows" : {
           "amd64" : {
-            # version difference due to rebuilding to statically link the standard library on windows
-            # "urls" : ["{host}/llvm-llvmorg-{version}-windows-amd64.tar.gz"],
-            "urls" : ["{host}/llvm-llvmorg-10.0.0-5-g67b19b2aed-bgfbfba28a74-windows-amd64.tar.gz"],
-            "sha1" : "7973931f1dcef6b3259d39c53efd5f7891c956c6",
+            "urls" : ["{host}/llvm-llvmorg-{version}-windows-amd64.tar.gz"],
+            "sha1" : "b50a564269b5c9b5012a3a87d7b1ab9862d24693",
           }
         },
         "<others>": {
@@ -147,20 +183,19 @@ suite = {
       "license" : "Apache-2.0-LLVM",
     },
     "LLVM_ORG_COMPILER_RT_LINUX" : {
-      "version" : "10.0.0-5-g67b19b2aed-bgb23ce12f48",
+      "version" : "12.0.1-4-g44c3fb5080-bgbcb1638df0",
       "host" : "https://lafo.ssw.uni-linz.ac.at/pub/llvm-org",
       # we really want linux-amd64, also on non-linux and non-amd64 platforms for cross-compilation
       "urls" : ["{host}/compiler-rt-llvmorg-{version}-linux-amd64.tar.gz"],
-      "sha1" : "8ebce7c8e9937246572e066f533f910778b7c870",
+      "sha1" : "3e210e06347e5cac68f0b46eb0bd5b268e8a45ed",
       "license" : "Apache-2.0-LLVM",
     },
     "LLVM_ORG_SRC" : {
-      # version difference as the sources did not change
-      "version" : "10.0.0-5-g67b19b2aed-bg83994d0b4b",
+      "version" : "12.0.1-4-g44c3fb5080-bgbcb1638df0",
       "host" : "https://lafo.ssw.uni-linz.ac.at/pub/llvm-org",
       "packedResource" : True,
       "urls" : ["{host}/llvm-src-llvmorg-{version}.tar.gz"],
-      "sha1" : "9c06839edd6983107753bc74bdd17452e98d9b7d",
+      "sha1" : "4c762d9d1172d18912ebb18a9f549936c76e7c80",
       "license" : "Apache-2.0-LLVM",
       },
   },
@@ -170,7 +205,7 @@ suite = {
       "sourceDirs" : ["src"],
       "dependencies" : [],
       "checkstyle" : "org.graalvm.word",
-      "javaCompliance" : "8+",
+      "javaCompliance" : "11+",
       "workingSets" : "API,SDK",
     },
     "org.graalvm.polyglot" : {
@@ -180,8 +215,11 @@ suite = {
         "org.graalvm.collections",
         "org.graalvm.home",
       ],
+      "requires" : [
+        "java.logging",
+      ],
       "checkstyle" : "org.graalvm.word",
-      "javaCompliance" : "8+",
+      "javaCompliance" : "11+",
       "workingSets" : "API,SDK",
     },
 
@@ -190,8 +228,8 @@ suite = {
       "sourceDirs" : ["src"],
       "dependencies" : [],
       "checkstyle" : "org.graalvm.word",
-      "javaCompliance" : "8+",
-      "checkstyleVersion" : "8.8",
+      "javaCompliance" : "11+",
+      "checkstyleVersion" : "8.36.1",
       "workingSets" : "API,SDK",
     },
 
@@ -203,7 +241,7 @@ suite = {
         "org.graalvm.options",
       ],
       "checkstyle" : "org.graalvm.word",
-      "javaCompliance" : "8+",
+      "javaCompliance" : "11+",
       "workingSets" : "API,SDK",
     },
     "org.graalvm.nativeimage.test" : {
@@ -213,7 +251,7 @@ suite = {
         "mx:JUNIT",
         "org.graalvm.nativeimage"
       ],
-      "javaCompliance" : "8+",
+      "javaCompliance" : "11+",
       "workingSets" : "SDK",
       "checkstyle" : "org.graalvm.word",
     },
@@ -225,7 +263,10 @@ suite = {
         "JLINE",
         "JLINE3",
       ],
-      "javaCompliance" : "8+",
+      "requires" : [
+        "java.logging",
+      ],
+      "javaCompliance" : "11+",
       "workingSets" : "Truffle,Tools",
       "checkstyle" : "org.graalvm.word",
     },
@@ -236,7 +277,7 @@ suite = {
         "mx:JUNIT",
         "org.graalvm.launcher"
       ],
-      "javaCompliance" : "8+",
+      "javaCompliance" : "11+",
       "workingSets" : "Truffle,Tools,Test",
       "checkstyle" : "org.graalvm.word",
     },
@@ -247,14 +288,14 @@ suite = {
         "org.graalvm.polyglot",
       ],
       "checkstyle" : "org.graalvm.word",
-      "javaCompliance" : "8+",
+      "javaCompliance" : "11+",
       "workingSets" : "API,SDK,Test",
     },
     "org.graalvm.collections" : {
       "subDir" : "src",
       "sourceDirs" : ["src"],
       "checkstyle" : "org.graalvm.word",
-      "javaCompliance" : "8+",
+      "javaCompliance" : "11+",
       "workingSets" : "API,SDK",
     },
     "org.graalvm.collections.test" : {
@@ -265,7 +306,7 @@ suite = {
         "org.graalvm.collections",
       ],
       "checkstyle" : "org.graalvm.word",
-      "javaCompliance" : "8+",
+      "javaCompliance" : "11+",
       "workingSets" : "API,SDK,Test",
     },
     "org.graalvm.home" : {
@@ -275,7 +316,7 @@ suite = {
         "org.graalvm.nativeimage",
       ],
       "checkstyle" : "org.graalvm.word",
-      "javaCompliance" : "8+",
+      "javaCompliance" : "11+",
       "workingSets" : "API,SDK",
     },
     "org.graalvm.home.test" : {
@@ -286,7 +327,7 @@ suite = {
         "org.graalvm.home",
       ],
       "checkstyle" : "org.graalvm.word",
-      "javaCompliance" : "8+",
+      "javaCompliance" : "11+",
       "workingSets" : "API,SDK",
     },
   },
@@ -302,6 +343,10 @@ suite = {
     "Apache-2.0-LLVM" : {
       "name" : "Apache License 2.0 with LLVM Exceptions",
       "url" : "http://releases.llvm.org/9.0.0/LICENSE.TXT"
+    },
+    "Apache-2.0-wrk-a211dd5" : {
+      "name" : "Modified Apache 2.0 License",
+      "url" : "https://raw.githubusercontent.com/wg/wrk/a211dd5a7050b1f9e8a9870b95513060e72ac4a0/LICENSE"
     },
 },
 
@@ -331,6 +376,7 @@ suite = {
           "org.graalvm.nativeimage.c.constant",
           "org.graalvm.nativeimage.c",
           "org.graalvm.nativeimage",
+          "org.graalvm.nativeimage.impl", # Uses of org.graalvm.nativeimage.impl.RuntimeSerializationSupport
           "org.graalvm.nativeimage.impl.clinit", # class initialization instrumentation
           "org.graalvm.polyglot.proxy",
           "org.graalvm.polyglot.io",
@@ -338,9 +384,9 @@ suite = {
           "org.graalvm.polyglot",
           "org.graalvm.options",
           "org.graalvm.word",
-          "org.graalvm.polyglot.impl to org.graalvm.truffle",
+          "org.graalvm.polyglot.impl to org.graalvm.truffle, com.oracle.graal.graal_enterprise",
           "org.graalvm.word.impl to jdk.internal.vm.compiler",
-          "org.graalvm.nativeimage.impl to org.graalvm.nativeimage.builder",
+          "org.graalvm.nativeimage.impl to org.graalvm.nativeimage.builder,org.graalvm.nativeimage.configure,com.oracle.svm.svm_enterprise",
         ],
         "uses" : [
           "org.graalvm.polyglot.impl.AbstractPolyglotImpl"
@@ -369,6 +415,9 @@ suite = {
       "subDir" : "src",
       "moduleInfo" : {
         "name" : "org.graalvm.launcher",
+        "exports" : [
+          "org.graalvm.launcher",
+        ],
       },
       "dependencies" : [
         "org.graalvm.launcher",

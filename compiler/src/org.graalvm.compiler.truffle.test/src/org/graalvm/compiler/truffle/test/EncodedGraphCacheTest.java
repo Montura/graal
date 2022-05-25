@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,7 +38,6 @@ import org.graalvm.compiler.truffle.compiler.TruffleCompilerImpl;
 import org.graalvm.compiler.truffle.options.PolyglotCompilerOptions;
 import org.graalvm.compiler.truffle.runtime.GraalTruffleRuntime;
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
-import org.graalvm.compiler.truffle.runtime.TruffleInlining;
 import org.graalvm.compiler.truffle.test.nodes.AbstractTestNode;
 import org.graalvm.compiler.truffle.test.nodes.RootTestNode;
 import org.graalvm.polyglot.Context;
@@ -125,12 +124,11 @@ public final class EncodedGraphCacheTest extends PartialEvaluationTest {
 
     @SuppressWarnings("try")
     private static OptimizedCallTarget compileAST(RootNode rootNode) {
-        GraalTruffleRuntime runtime = GraalTruffleRuntime.getRuntime();
-        OptimizedCallTarget target = (OptimizedCallTarget) runtime.createCallTarget(rootNode);
-        DebugContext debug = new DebugContext.Builder(runtime.getGraalOptions(OptionValues.class)).build();
+        OptimizedCallTarget target = (OptimizedCallTarget) rootNode.getCallTarget();
+        DebugContext debug = new DebugContext.Builder(GraalTruffleRuntime.getRuntime().getGraalOptions(OptionValues.class)).build();
         try (DebugContext.Scope s = debug.scope("EncodedGraphCacheTest")) {
             CompilationIdentifier compilationId = getTruffleCompilerFromRuntime(target).createCompilationIdentifier(target);
-            getTruffleCompilerFromRuntime(target).compileAST(target.getOptionValues(), debug, target, new TruffleInlining(), compilationId, null, null);
+            getTruffleCompilerFromRuntime(target).compileAST(target.getOptionValues(), debug, target, compilationId, null, null);
             assertTrue(target.isValid());
             return target;
         }

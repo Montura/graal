@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,6 +40,7 @@
  */
 package com.oracle.truffle.api.test.polyglot;
 
+import static com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage.evalTestLanguage;
 import static com.oracle.truffle.api.test.polyglot.AbstractPolyglotTest.assertFails;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -55,6 +56,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -69,6 +71,7 @@ import java.util.function.Predicate;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.HostAccess;
+import org.graalvm.polyglot.HostAccess.Builder;
 import org.graalvm.polyglot.HostAccess.Export;
 import org.graalvm.polyglot.HostAccess.Implementable;
 import org.graalvm.polyglot.HostAccess.TargetMappingPrecedence;
@@ -82,10 +85,21 @@ import org.junit.After;
 import org.junit.Ignore;
 import org.junit.Test;
 
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.TruffleLanguage;
+import com.oracle.truffle.api.interop.UnsupportedMessageException;
+import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.test.common.AbstractExecutableTestLanguage;
+import com.oracle.truffle.api.test.common.NullObject;
+import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 import com.oracle.truffle.tck.tests.ValueAssert;
 import com.oracle.truffle.tck.tests.ValueAssert.Trait;
 
 public class HostAccessTest {
+
+    public static final String INSTANTIATION_FAILED = "Instantiation failed";
+    public static final String RETURNED_STRING = "Returned string";
+
     public static class OK {
         public int value = 42;
     }
@@ -113,6 +127,7 @@ public class HostAccessTest {
     public void constantsCanBeCopied() {
         verifyObjectImpl(HostAccess.NONE);
         verifyObjectImpl(HostAccess.EXPLICIT);
+        verifyObjectImpl(HostAccess.SCOPED);
         verifyObjectImpl(HostAccess.ALL);
     }
 
@@ -349,7 +364,7 @@ public class HostAccessTest {
             fail();
         } catch (UnsupportedOperationException e) {
         }
-        assertEquals(0, value.getMemberKeys().size());
+        assertEquals(2 /* arr.length and arr.clone(). */, value.getMemberKeys().size());
         ValueAssert.assertValue(value, false, Trait.ARRAY_ELEMENTS, Trait.ITERABLE, Trait.MEMBERS, Trait.HOST_OBJECT);
     }
 
@@ -370,6 +385,65 @@ public class HostAccessTest {
         Value value = context.asValue(array);
         assertSame(array, value.asHostObject());
         ValueAssert.assertValue(value, false, Trait.MEMBERS, Trait.HOST_OBJECT);
+    }
+
+    @Test
+    public void testBufferAccessEnabled() {
+        setupEnv(HostAccess.newBuilder().allowBufferAccess(true));
+        assertBufferAccessEnabled(context);
+    }
+
+    @Test
+    public void testBufferAccessEnabledHostAccessCloned() {
+        HostAccess hostAccess = HostAccess.newBuilder().allowBufferAccess(true).build();
+        setupEnv(HostAccess.newBuilder(hostAccess));
+        assertBufferAccessEnabled(context);
+    }
+
+    private static void assertBufferAccessEnabled(Context context) {
+        ByteBuffer buffer = ByteBuffer.allocate(2);
+        buffer.put((byte) 42);
+        Value value = context.asValue(buffer);
+        assertTrue(value.hasBufferElements());
+        assertTrue(value.isBufferWritable());
+        assertEquals(2, value.getBufferSize());
+        assertEquals(42, value.readBufferByte(0));
+        value.writeBufferByte(1, (byte) 24);
+        assertEquals(24, value.readBufferByte(1));
+        ValueAssert.assertValue(value, false, Trait.BUFFER_ELEMENTS, Trait.MEMBERS, Trait.HOST_OBJECT);
+    }
+
+    @Test
+    public void testBufferAccessDisabled() {
+        setupEnv(HostAccess.newBuilder().allowBufferAccess(false));
+        ByteBuffer buffer = ByteBuffer.allocate(2);
+        Value value = context.asValue(buffer);
+        assertSame(buffer, value.asHostObject());
+        ValueAssert.assertValue(value, false, Trait.MEMBERS, Trait.HOST_OBJECT);
+    }
+
+    /*
+     * Test for GR-32346.
+     */
+    @Test
+    public void testBuilderCannotChangeMembersAndTargetMappingsOfHostAccess() throws Exception {
+        // Set up hostAccess
+        Builder builder = HostAccess.newBuilder();
+        builder.allowAccess(OK.class.getField("value"));
+        builder.targetTypeMapping(Value.class, String.class, (v) -> v.isString(), (v) -> "foo");
+        HostAccess hostAccess = builder.build();
+
+        // Try to change members or targetMappings through child builder
+        Builder childBuilder = HostAccess.newBuilder(hostAccess);
+        childBuilder.allowAccess(Ban.class.getField("value"));
+        childBuilder.targetTypeMapping(Value.class, Integer.class, null, (v) -> 42);
+
+        // Ensure hostAccess has not been altered by child builder
+        try (Context c = Context.newBuilder().allowHostAccess(hostAccess).build()) {
+            assertAccess(c);
+            assertEquals("foo", c.asValue("a string").as(String.class));
+            assertEquals(123, (int) c.asValue(123).as(Integer.class));
+        }
     }
 
     @Test
@@ -695,7 +769,7 @@ public class HostAccessTest {
 
     }
 
-    static final TypeLiteral<List<TargetClass1>> TARGET_CLASS_LIST = new TypeLiteral<List<TargetClass1>>() {
+    static final TypeLiteral<List<TargetClass1>> TARGET_CLASS_LIST = new TypeLiteral<>() {
     };
 
     @Test
@@ -730,10 +804,10 @@ public class HostAccessTest {
         assertEquals("422", list.get(1).o);
     }
 
-    static final TypeLiteral<Map<String, TargetClass1>> TARGET_CLASS_MAP_STRING = new TypeLiteral<Map<String, TargetClass1>>() {
+    static final TypeLiteral<Map<String, TargetClass1>> TARGET_CLASS_MAP_STRING = new TypeLiteral<>() {
     };
 
-    static final TypeLiteral<Map<Long, TargetClass1>> TARGET_CLASS_MAP_LONG = new TypeLiteral<Map<Long, TargetClass1>>() {
+    static final TypeLiteral<Map<Long, TargetClass1>> TARGET_CLASS_MAP_LONG = new TypeLiteral<>() {
     };
 
     @Test
@@ -821,6 +895,9 @@ public class HostAccessTest {
         assertEquals("422", map.get("f1").o);
     }
 
+    /*
+     * Referenced in proxys.json
+     */
     @Implementable
     public interface ConverterProxy {
 
@@ -862,6 +939,9 @@ public class HostAccessTest {
         assertEquals("422", map.f1().o);
     }
 
+    /*
+     * Referenced in proxys.json
+     */
     @FunctionalInterface
     public interface ConverterFunction {
 
@@ -947,7 +1027,7 @@ public class HostAccessTest {
         HostAccess.Builder builder = HostAccess.newBuilder();
         builder.allowPublicAccess(true);
         final IllegalArgumentException error = new IllegalArgumentException();
-        Predicate<Integer> errorAccepts = new Predicate<Integer>() {
+        Predicate<Integer> errorAccepts = new Predicate<>() {
             public boolean test(Integer t) {
                 error.initCause(new RuntimeException());
                 throw error;
@@ -1015,6 +1095,13 @@ public class HostAccessTest {
 
     @Test
     public void testConverterReturnsNull() {
+        /*
+         * HotSpot uses GuestToHostCodeCache#methodHandleHostInvoke and SVM uses
+         * GuestToHostCodeCache#reflectionHostInvoke. These two methods throw a different exception
+         * when a null value is passed as a method int argument. The former throws
+         * NullPointerException during automatic unboxing, the latter throws
+         * IllegalArgumentException.
+         */
         HostAccess.Builder builder = HostAccess.newBuilder();
         builder.targetTypeMapping(Integer.class, Integer.class, (v) -> v.equals(42), (v) -> {
             return null;
@@ -1025,7 +1112,7 @@ public class HostAccessTest {
             fail();
         } catch (PolyglotException e) {
             assertTrue(e.isHostException());
-            assertTrue(e.asHostException() instanceof NullPointerException);
+            assertTrue(TruffleTestAssumptions.isAOT() ? e.asHostException() instanceof IllegalArgumentException : e.asHostException() instanceof NullPointerException);
         }
 
         assertNull(context.asValue(42).as(int.class));
@@ -1106,6 +1193,9 @@ public class HostAccessTest {
 
     }
 
+    /*
+     * Referenced in proxys.json
+     */
     @Implementable
     public interface TestInterface {
 
@@ -1561,25 +1651,6 @@ public class HostAccessTest {
     }
 
     @Test
-    public void testReturnsNull() {
-        HostAccess.Builder builder = HostAccess.newBuilder();
-        builder.targetTypeMapping(Integer.class, Integer.class, (v) -> v.equals(42), (v) -> {
-            return null;
-        });
-        setupEnv(builder);
-        try {
-            context.asValue(new PassPrimitive()).invokeMember("f0", 42);
-            fail();
-        } catch (PolyglotException e) {
-            assertTrue(e.isHostException());
-            assertTrue(e.asHostException() instanceof NullPointerException);
-        }
-
-        assertNull(context.asValue(42).as(int.class));
-        assertEquals(43, context.asValue(43).asInt());
-    }
-
-    @Test
     public void testPassNullValue() {
         HostAccess.Builder builder = HostAccess.newBuilder();
         AtomicInteger invoked = new AtomicInteger();
@@ -1715,6 +1786,164 @@ public class HostAccessTest {
         @Override
         public Iterator<T> iterator() {
             return new IteratorImpl<>(values);
+        }
+    }
+
+    public abstract static class NoArgumentConstructorTestClass {
+        public NoArgumentConstructorTestClass() {
+        }
+
+        public String returnString() {
+            return RETURNED_STRING;
+        }
+    }
+
+    public static class NoArgumentConstructorTestSubClass extends NoArgumentConstructorTestClass {
+    }
+
+    public abstract static class ArgumentConstructorTestClass {
+        private final String str;
+
+        public ArgumentConstructorTestClass(String str) {
+            this.str = str;
+        }
+
+        public String returnString() {
+            return str;
+        }
+    }
+
+    public static class ArgumentConstructorTestSubClass extends ArgumentConstructorTestClass {
+        public ArgumentConstructorTestSubClass(String str) {
+            super(str);
+        }
+    }
+
+    @TruffleLanguage.Registration
+    static class NoArgAbstractClassInstantiationTestLanguage extends AbstractExecutableTestLanguage {
+
+        @Override
+        @CompilerDirectives.TruffleBoundary
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            try {
+                Object classObj = env.lookupHostSymbol(NoArgumentConstructorTestClass.class.getName());
+                interop.instantiate(classObj);
+                fail();
+            } catch (UnsupportedMessageException e) {
+                return INSTANTIATION_FAILED;
+            }
+            return null;
+        }
+    }
+
+    @TruffleLanguage.Registration
+    static class NoArgSubclassInstantiationTestLanguage extends AbstractExecutableTestLanguage {
+
+        @Override
+        @CompilerDirectives.TruffleBoundary
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            Object classObj = env.lookupHostSymbol(NoArgumentConstructorTestSubClass.class.getName());
+            Object obj = interop.instantiate(classObj);
+            return interop.invokeMember(obj, "returnString");
+        }
+    }
+
+    @TruffleLanguage.Registration
+    static class ArgAbstractClassInstantiationTestLanguage extends AbstractExecutableTestLanguage {
+
+        @Override
+        @CompilerDirectives.TruffleBoundary
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            try {
+                Object classObj = env.lookupHostSymbol(ArgumentConstructorTestClass.class.getName());
+                interop.instantiate(classObj, RETURNED_STRING);
+                fail();
+            } catch (UnsupportedMessageException e) {
+                return INSTANTIATION_FAILED;
+            }
+            return null;
+        }
+    }
+
+    @TruffleLanguage.Registration
+    static class ArgSubclassInstantiationTestLanguage extends AbstractExecutableTestLanguage {
+
+        @Override
+        @CompilerDirectives.TruffleBoundary
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            Object classObj = env.lookupHostSymbol(ArgumentConstructorTestSubClass.class.getName());
+            Object obj = interop.instantiate(classObj, RETURNED_STRING);
+            return interop.invokeMember(obj, "returnString");
+        }
+    }
+
+    @TruffleLanguage.Registration
+    static class NoArgAdapterInstantiationTestLanguage extends AbstractExecutableTestLanguage {
+
+        @Override
+        @CompilerDirectives.TruffleBoundary
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            Object classObj = env.lookupHostSymbol(NoArgumentConstructorTestClass.class.getName());
+            classObj = env.createHostAdapter(new Object[]{classObj});
+            Object obj = interop.instantiate(classObj, NullObject.SINGLETON);
+            return interop.invokeMember(obj, "returnString");
+        }
+    }
+
+    @TruffleLanguage.Registration
+    static class ArgAdapterInstantiationTestLanguage extends AbstractExecutableTestLanguage {
+
+        @Override
+        @CompilerDirectives.TruffleBoundary
+        protected Object execute(RootNode node, Env env, Object[] contextArguments, Object[] frameArguments) throws Exception {
+            Object classObj = env.lookupHostSymbol(ArgumentConstructorTestClass.class.getName());
+            classObj = env.createHostAdapter(new Object[]{classObj});
+            Object obj = interop.instantiate(classObj, RETURNED_STRING, NullObject.SINGLETON);
+            return interop.invokeMember(obj, "returnString");
+        }
+    }
+
+    @Test
+    public void testNoArgAbstractClassInstantiation() {
+        try (Context c = Context.newBuilder().allowAllAccess(true).build()) {
+            assertEquals(INSTANTIATION_FAILED, evalTestLanguage(c, NoArgAbstractClassInstantiationTestLanguage.class, "no argument constructor abstract class failure").asString());
+        }
+    }
+
+    @Test
+    public void testNoArgSubclassInstantiation() {
+        try (Context c = Context.newBuilder().allowAllAccess(true).build()) {
+            assertEquals(RETURNED_STRING, evalTestLanguage(c, NoArgSubclassInstantiationTestLanguage.class, "no argument constructor sub class success").asString());
+        }
+    }
+
+    @Test
+    public void testArgAbstractClassInstantiation() {
+        try (Context c = Context.newBuilder().allowAllAccess(true).build()) {
+            assertEquals(INSTANTIATION_FAILED, evalTestLanguage(c, ArgAbstractClassInstantiationTestLanguage.class, "argument constructor abstract class failure").asString());
+        }
+    }
+
+    @Test
+    public void testArgSubclassInstantiation() {
+        try (Context c = Context.newBuilder().allowAllAccess(true).build()) {
+            assertEquals(RETURNED_STRING, evalTestLanguage(c, ArgSubclassInstantiationTestLanguage.class, "argument constructor sub class success").asString());
+        }
+    }
+
+    @Test
+    public void testNoArgAdapterInstantiation() {
+        TruffleTestAssumptions.assumeNotAOT();
+        try (Context c = Context.newBuilder().allowAllAccess(true).build()) {
+            assertEquals(RETURNED_STRING, evalTestLanguage(c, NoArgAdapterInstantiationTestLanguage.class, "no argument constructor adapter success").asString());
+        }
+    }
+
+    @Test
+    public void testArgAdapterInstantiation() {
+        TruffleTestAssumptions.assumeNotAOT();
+        try (Context c = Context.newBuilder().allowAllAccess(true).build()) {
+            assertEquals(RETURNED_STRING, evalTestLanguage(c, ArgAdapterInstantiationTestLanguage.class, "argument constructor adapter success").asString());
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -43,8 +43,8 @@ import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeBitMap;
+import org.graalvm.compiler.graph.NodeInputList;
 import org.graalvm.compiler.graph.Position;
-import org.graalvm.compiler.graph.spi.Canonicalizable;
 import org.graalvm.compiler.nodes.AbstractEndNode;
 import org.graalvm.compiler.nodes.CallTargetNode;
 import org.graalvm.compiler.nodes.ConstantNode;
@@ -67,6 +67,7 @@ import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
 import org.graalvm.compiler.nodes.VirtualState;
 import org.graalvm.compiler.nodes.cfg.Block;
+import org.graalvm.compiler.nodes.spi.Canonicalizable;
 import org.graalvm.compiler.nodes.spi.CoreProviders;
 import org.graalvm.compiler.nodes.spi.NodeWithState;
 import org.graalvm.compiler.nodes.spi.Virtualizable;
@@ -74,8 +75,9 @@ import org.graalvm.compiler.nodes.spi.VirtualizableAllocation;
 import org.graalvm.compiler.nodes.spi.VirtualizerTool;
 import org.graalvm.compiler.nodes.virtual.AllocatedObjectNode;
 import org.graalvm.compiler.nodes.virtual.EnsureVirtualizedNode;
+import org.graalvm.compiler.nodes.virtual.EscapeObjectState;
 import org.graalvm.compiler.nodes.virtual.VirtualObjectNode;
-import org.graalvm.compiler.virtual.nodes.VirtualObjectState;
+import org.graalvm.compiler.nodes.virtual.VirtualObjectState;
 
 import jdk.vm.ci.meta.JavaConstant;
 import jdk.vm.ci.meta.JavaKind;
@@ -88,6 +90,7 @@ public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockStat
     public static final CounterKey COUNTER_MATERIALIZATIONS_UNHANDLED = DebugContext.counter("MaterializationsUnhandled");
     public static final CounterKey COUNTER_MATERIALIZATIONS_LOOP_REITERATION = DebugContext.counter("MaterializationsLoopReiteration");
     public static final CounterKey COUNTER_MATERIALIZATIONS_LOOP_END = DebugContext.counter("MaterializationsLoopEnd");
+    public static final CounterKey COUNTER_MATERIALIZATIONS_LOOP_EXIT = DebugContext.counter("MaterializationsLoopExit");
     public static final CounterKey COUNTER_ALLOCATION_REMOVED = DebugContext.counter("AllocationsRemoved");
     public static final CounterKey COUNTER_MEMORYCHECKPOINT = DebugContext.counter("MemoryCheckpoint");
 
@@ -440,7 +443,30 @@ public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockStat
     }
 
     private void addVirtualMappings(FrameState frameState, EconomicSet<VirtualObjectNode> virtual, BlockT state, GraphEffectList effects) {
-        for (VirtualObjectNode obj : virtual) {
+        object: for (VirtualObjectNode obj : virtual) {
+            /*
+             * Look for existing mappings: Update a virtual object mapping for the given {@link
+             * VirtualObjectState} with a new value. This can be necessary in iterative escape
+             * analysis where a previous iteration already virtualized an object. We must not update
+             * such mappings if no new virtualization occurred. Updating them would create invalid
+             * framestate - virtualization mappings of constructor written fields.
+             */
+            for (int i = 0; i < frameState.virtualObjectMappingCount(); i++) {
+                EscapeObjectState mapping = frameState.virtualObjectMappingAt(i);
+                if (mapping.object() == obj && mapping instanceof VirtualObjectState) {
+                    VirtualObjectState virtualState = (VirtualObjectState) mapping;
+                    NodeInputList<ValueNode> values = virtualState.values();
+                    for (int v = 0; v < values.size(); v++) {
+                        ValueNode value = values.get(v);
+                        ValueNode alias = getAlias(value);
+                        if (alias != value) {
+                            effects.updateVirtualMapping(virtualState, v, alias);
+                        }
+                    }
+                    continue object;
+                }
+            }
+
             effects.addVirtualMapping(frameState, state.getObjectState(obj).createEscapeObjectState(debug, tool.getMetaAccessExtensionProvider(), obj));
         }
     }
@@ -599,11 +625,17 @@ public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockStat
     @Override
     protected void processLoopExit(LoopExitNode exitNode, BlockT initialState, BlockT exitState, GraphEffectList effects) {
         if (exitNode.graph().isBeforeStage(StageFlag.VALUE_PROXY_REMOVAL)) {
+            // We cannot go below loop exits with an exception handling BCI, it would create
+            // allocations whose slow path has an invalid frame state.
+            boolean forceMaterialization = exitNode.stateAfter().isExceptionHandlingBCI();
             EconomicMap<Integer, ProxyNode> proxies = EconomicMap.create(Equivalence.DEFAULT);
             for (ProxyNode proxy : exitNode.proxies()) {
                 ValueNode alias = getAlias(proxy.value());
                 if (alias instanceof VirtualObjectNode) {
                     VirtualObjectNode virtual = (VirtualObjectNode) alias;
+                    if (forceMaterialization) {
+                        ensureMaterialized(exitState, virtual.getObjectId(), exitNode, effects, COUNTER_MATERIALIZATIONS_LOOP_EXIT);
+                    }
                     proxies.put(virtual.getObjectId(), proxy);
                 }
             }
@@ -856,6 +888,40 @@ public abstract class PartialEscapeClosure<BlockT extends PartialEscapeBlockStat
                                     setPhiInput(materializedValuePhi, i, obj.getMaterializedValue());
                                 }
                                 newState.addObject(object, new ObjectState(materializedValuePhi, null, false));
+                            }
+                        }
+                    }
+                    if (virtualObjTemp.length == 0 && forceMaterialization && merge.isPhiAtMerge(forcedMaterializationValue)) {
+                        /*
+                         * We never entered the virtualObjTemp loop above but still need to force
+                         * materialization of this phi's inputs.
+                         */
+                        PhiNode phi = (PhiNode) forcedMaterializationValue;
+                        for (int i = 0; i < states.length; i++) {
+                            ValueNode value = phi.valueAt(i);
+                            ValueNode alias = getAlias(value);
+                            if (alias instanceof VirtualObjectNode) {
+                                VirtualObjectNode virtual = (VirtualObjectNode) alias;
+                                if (states[i].hasObjectState(virtual.getObjectId())) {
+                                    Block predecessor = getPredecessor(i);
+                                    materialized |= ensureMaterialized(states[i], virtual.getObjectId(), predecessor.getEndNode(), blockEffects.get(predecessor), COUNTER_MATERIALIZATIONS_MERGE);
+                                }
+                            }
+                        }
+                    } else if (virtualObjTemp.length == 0 && forceMaterialization) {
+                        /*
+                         * We must materialize everything.
+                         */
+                        for (VirtualObjectNode virtualObject : virtualObjects) {
+                            ValueNode alias = getAlias(virtualObject);
+                            if (alias instanceof VirtualObjectNode) {
+                                VirtualObjectNode virtual = (VirtualObjectNode) alias;
+                                for (int i = 0; i < states.length; i++) {
+                                    if (states[i].hasObjectState(virtual.getObjectId())) {
+                                        Block predecessor = getPredecessor(i);
+                                        materialized |= ensureMaterialized(states[i], virtual.getObjectId(), predecessor.getEndNode(), blockEffects.get(predecessor), COUNTER_MATERIALIZATIONS_MERGE);
+                                    }
+                                }
                             }
                         }
                     }

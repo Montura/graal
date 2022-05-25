@@ -32,6 +32,7 @@ import com.oracle.svm.core.annotate.AlwaysInline;
 import com.oracle.svm.core.annotate.DuplicatedInNativeCode;
 import com.oracle.svm.core.c.NonmovableArray;
 import com.oracle.svm.core.config.ConfigurationValues;
+import com.oracle.svm.core.thread.Continuation;
 import com.oracle.svm.core.util.NonmovableByteArrayReader;
 import com.oracle.svm.core.util.TypedMemoryReader;
 
@@ -42,8 +43,8 @@ public class InstanceReferenceMapDecoder {
         assert ReferenceMapIndex.denotesValidReferenceMap(referenceMapIndex);
         assert referenceMapEncoding.isNonNull();
 
-        if (referenceMapIndex == ReferenceMapIndex.STORED_CONTINUATION) {
-            return StoredContinuationImpl.walkStoredContinuationFromPointer(baseAddress, visitor, holderObject);
+        if (Continuation.isSupported() && referenceMapIndex == ReferenceMapIndex.STORED_CONTINUATION) {
+            return StoredContinuationImpl.walkStoredContinuationFromPointer(baseAddress, null, visitor, holderObject);
         }
 
         Pointer position = NonmovableByteArrayReader.pointerTo(referenceMapEncoding, referenceMapIndex);

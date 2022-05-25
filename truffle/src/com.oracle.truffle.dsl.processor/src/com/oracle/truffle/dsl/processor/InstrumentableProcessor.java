@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -352,7 +352,7 @@ public final class InstrumentableProcessor extends AbstractProcessor {
 
         ExecutableElement genericExecuteDelegate = null;
         for (ExecutableElement method : ElementFilter.methodsIn(elementList)) {
-            if (isExecuteMethod(method) && isOverridable(method)) {
+            if (isExecuteMethod(method, types) && isOverridable(method)) {
                 VariableElement firstParam = method.getParameters().isEmpty() ? null : method.getParameters().get(0);
                 if (topLevelClass && (firstParam == null || !ElementUtils.isAssignable(firstParam.asType(), types.VirtualFrame))) {
                     emitError(e, String.format("Wrapped execute method %s must have VirtualFrame as first parameter.", method.getSimpleName()));
@@ -369,10 +369,10 @@ public final class InstrumentableProcessor extends AbstractProcessor {
                 continue;
             }
 
-            String methodName = method.getSimpleName().toString();
-            if (methodName.startsWith(EXECUTE_METHOD_PREFIX)) {
+            if (isExecuteMethod(method, types)) {
                 wrappedExecuteMethods.add(method);
             } else {
+                String methodName = method.getSimpleName().toString();
                 if (method.getModifiers().contains(Modifier.ABSTRACT) && !methodName.equals("getSourceSection") //
                                 && !methodName.equals(METHOD_GET_NODE_COST) && !hasUnexpectedResult(context, method)) {
                     wrappedMethods.add(method);
@@ -589,12 +589,13 @@ public final class InstrumentableProcessor extends AbstractProcessor {
         return wrapperType;
     }
 
-    private static boolean isExecuteMethod(ExecutableElement method) {
+    private static boolean isExecuteMethod(ExecutableElement method, TruffleTypes types) {
         String methodName = method.getSimpleName().toString();
-        if (!methodName.startsWith(EXECUTE_METHOD_PREFIX)) {
-            return false;
-        }
-        return true;
+        return methodName.startsWith(EXECUTE_METHOD_PREFIX) && !isIgnored(method, types);
+    }
+
+    private static boolean isIgnored(ExecutableElement method, TruffleTypes types) {
+        return ElementUtils.findAnnotationMirror(method, types.GenerateWrapper_Ignore) != null;
     }
 
     private static boolean isOverridable(ExecutableElement method) {

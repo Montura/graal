@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,10 +40,6 @@
  */
 package org.graalvm.polyglot;
 
-import org.graalvm.polyglot.HostAccess.TargetMappingPrecedence;
-import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractValueImpl;
-import org.graalvm.polyglot.proxy.Proxy;
-
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.nio.ByteOrder;
@@ -63,6 +59,10 @@ import java.util.NoSuchElementException;
 import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
+
+import org.graalvm.polyglot.HostAccess.TargetMappingPrecedence;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractValueDispatch;
+import org.graalvm.polyglot.proxy.Proxy;
 
 /**
  * Represents a polyglot value that can be accessed using a set of language agnostic operations.
@@ -146,19 +146,26 @@ import java.util.function.Function;
  * program whether a particular number represents metres, miles, or mass. Naive objects are easy to
  * understand and to work with, at the cost of ignoring some aspects of reality.
  *
+ * <h3>Scoped Values</h3>
+ *
+ * In the case of a guest-to-host callback, a value may be passed as a parameter. These values may
+ * represent objects that are only valid during the invocation of the callback function, i.e. they
+ * are scoped, with the scope being the callback function. If enabled via the corresponding settings
+ * in {@link HostAccess}, such values are released when the function returns, with all future
+ * invocations of value operations throwing an exception.
+ *
+ * If an embedder wishes to extend the scope of the value beyond the callback's return, the value
+ * can be {@linkplain Value#pin() pinned}, such that it is not released automatically.
+ *
  * @see Context
  * @see Engine
  * @see PolyglotException
  * @since 19.0
  */
-public final class Value {
+public final class Value extends AbstractValue {
 
-    final Object receiver;
-    final AbstractValueImpl impl;
-
-    Value(AbstractValueImpl impl, Object value) {
-        this.impl = impl;
-        this.receiver = value;
+    Value(AbstractValueDispatch dispatch, Object context, Object receiver) {
+        super(dispatch, context, receiver);
     }
 
     /**
@@ -179,7 +186,7 @@ public final class Value {
      * @since 19.0 revised in 20.1
      */
     public Value getMetaObject() {
-        return impl.getMetaObject(receiver);
+        return dispatch.getMetaObject(this.context, receiver);
     }
 
     /**
@@ -206,7 +213,7 @@ public final class Value {
      * @since 20.1
      */
     public boolean isMetaObject() {
-        return impl.isMetaObject(receiver);
+        return dispatch.isMetaObject(this.context, receiver);
     }
 
     /**
@@ -222,7 +229,7 @@ public final class Value {
      * @since 20.1
      */
     public String getMetaQualifiedName() {
-        return impl.getMetaQualifiedName(receiver);
+        return dispatch.getMetaQualifiedName(this.context, receiver);
     }
 
     /**
@@ -236,7 +243,7 @@ public final class Value {
      * @since 20.1
      */
     public String getMetaSimpleName() {
-        return impl.getMetaSimpleName(receiver);
+        return dispatch.getMetaSimpleName(this.context, receiver);
     }
 
     /**
@@ -255,7 +262,7 @@ public final class Value {
      * @since 20.1
      */
     public boolean isMetaInstance(Object instance) {
-        return impl.isMetaInstance(receiver, instance);
+        return dispatch.isMetaInstance(this.context, receiver, instance);
     }
 
     /**
@@ -269,7 +276,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean hasArrayElements() {
-        return impl.hasArrayElements(receiver);
+        return dispatch.hasArrayElements(this.context, receiver);
     }
 
     /**
@@ -285,7 +292,7 @@ public final class Value {
      * @since 19.0
      */
     public Value getArrayElement(long index) {
-        return impl.getArrayElement(receiver, index);
+        return dispatch.getArrayElement(this.context, receiver, index);
     }
 
     /**
@@ -303,7 +310,7 @@ public final class Value {
      * @since 19.0
      */
     public void setArrayElement(long index, Object value) {
-        impl.setArrayElement(receiver, index, value);
+        dispatch.setArrayElement(this.context, receiver, index, value);
     }
 
     /**
@@ -319,7 +326,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean removeArrayElement(long index) {
-        return impl.removeArrayElement(receiver, index);
+        return dispatch.removeArrayElement(this.context, receiver, index);
     }
 
     /**
@@ -332,7 +339,7 @@ public final class Value {
      * @since 19.0
      */
     public long getArraySize() {
-        return impl.getArraySize(receiver);
+        return dispatch.getArraySize(this.context, receiver);
     }
 
     // region Buffer Methods
@@ -359,7 +366,7 @@ public final class Value {
      * @since 21.1
      */
     public boolean hasBufferElements() {
-        return impl.hasBufferElements(receiver);
+        return dispatch.hasBufferElements(this.context, receiver);
     }
 
     /**
@@ -378,7 +385,7 @@ public final class Value {
      * @since 21.1
      */
     public boolean isBufferWritable() throws UnsupportedOperationException {
-        return impl.isBufferWritable(receiver);
+        return dispatch.isBufferWritable(this.context, receiver);
     }
 
     /**
@@ -391,7 +398,7 @@ public final class Value {
      * @since 21.1
      */
     public long getBufferSize() throws UnsupportedOperationException {
-        return impl.getBufferSize(receiver);
+        return dispatch.getBufferSize(this.context, receiver);
     }
 
     /**
@@ -414,7 +421,7 @@ public final class Value {
      * @since 21.1
      */
     public byte readBufferByte(long byteOffset) throws UnsupportedOperationException, IndexOutOfBoundsException {
-        return impl.readBufferByte(receiver, byteOffset);
+        return dispatch.readBufferByte(this.context, receiver, byteOffset);
     }
 
     /**
@@ -435,7 +442,7 @@ public final class Value {
      * @since 21.1
      */
     public void writeBufferByte(long byteOffset, byte value) throws UnsupportedOperationException, IndexOutOfBoundsException {
-        impl.writeBufferByte(receiver, byteOffset, value);
+        dispatch.writeBufferByte(this.context, receiver, byteOffset, value);
     }
 
     /**
@@ -462,7 +469,7 @@ public final class Value {
      * @since 21.1
      */
     public short readBufferShort(ByteOrder order, long byteOffset) throws UnsupportedOperationException, IndexOutOfBoundsException {
-        return impl.readBufferShort(receiver, order, byteOffset);
+        return dispatch.readBufferShort(this.context, receiver, order, byteOffset);
     }
 
     /**
@@ -487,7 +494,7 @@ public final class Value {
      * @since 21.1
      */
     public void writeBufferShort(ByteOrder order, long byteOffset, short value) throws UnsupportedOperationException, IndexOutOfBoundsException {
-        impl.writeBufferShort(receiver, order, byteOffset, value);
+        dispatch.writeBufferShort(this.context, receiver, order, byteOffset, value);
     }
 
     /**
@@ -513,7 +520,7 @@ public final class Value {
      * @since 21.1
      */
     public int readBufferInt(ByteOrder order, long byteOffset) throws UnsupportedOperationException, IndexOutOfBoundsException {
-        return impl.readBufferInt(receiver, order, byteOffset);
+        return dispatch.readBufferInt(this.context, receiver, order, byteOffset);
     }
 
     /**
@@ -538,7 +545,7 @@ public final class Value {
      * @since 21.1
      */
     public void writeBufferInt(ByteOrder order, long byteOffset, int value) throws UnsupportedOperationException, IndexOutOfBoundsException {
-        impl.writeBufferInt(receiver, order, byteOffset, value);
+        dispatch.writeBufferInt(this.context, receiver, order, byteOffset, value);
     }
 
     /**
@@ -564,7 +571,7 @@ public final class Value {
      * @since 21.1
      */
     public long readBufferLong(ByteOrder order, long byteOffset) throws UnsupportedOperationException, IndexOutOfBoundsException {
-        return impl.readBufferLong(receiver, order, byteOffset);
+        return dispatch.readBufferLong(this.context, receiver, order, byteOffset);
     }
 
     /**
@@ -589,7 +596,7 @@ public final class Value {
      * @since 21.1
      */
     public void writeBufferLong(ByteOrder order, long byteOffset, long value) throws UnsupportedOperationException, IndexOutOfBoundsException {
-        impl.writeBufferLong(receiver, order, byteOffset, value);
+        dispatch.writeBufferLong(this.context, receiver, order, byteOffset, value);
     }
 
     /**
@@ -616,7 +623,7 @@ public final class Value {
      * @since 21.1
      */
     public float readBufferFloat(ByteOrder order, long byteOffset) throws UnsupportedOperationException, IndexOutOfBoundsException {
-        return impl.readBufferFloat(receiver, order, byteOffset);
+        return dispatch.readBufferFloat(this.context, receiver, order, byteOffset);
     }
 
     /**
@@ -641,7 +648,7 @@ public final class Value {
      * @since 21.1
      */
     public void writeBufferFloat(ByteOrder order, long byteOffset, float value) throws UnsupportedOperationException, IndexOutOfBoundsException {
-        impl.writeBufferFloat(receiver, order, byteOffset, value);
+        dispatch.writeBufferFloat(this.context, receiver, order, byteOffset, value);
     }
 
     /**
@@ -668,7 +675,7 @@ public final class Value {
      * @since 21.1
      */
     public double readBufferDouble(ByteOrder order, long byteOffset) throws UnsupportedOperationException, IndexOutOfBoundsException {
-        return impl.readBufferDouble(receiver, order, byteOffset);
+        return dispatch.readBufferDouble(this.context, receiver, order, byteOffset);
     }
 
     /**
@@ -693,7 +700,7 @@ public final class Value {
      * @since 21.1
      */
     public void writeBufferDouble(ByteOrder order, long byteOffset, double value) throws UnsupportedOperationException, IndexOutOfBoundsException {
-        impl.writeBufferDouble(receiver, order, byteOffset, value);
+        dispatch.writeBufferDouble(this.context, receiver, order, byteOffset, value);
     }
 
     // endregion
@@ -715,7 +722,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean hasMembers() {
-        return impl.hasMembers(receiver);
+        return dispatch.hasMembers(this.context, receiver);
     }
 
     /**
@@ -729,7 +736,7 @@ public final class Value {
      */
     public boolean hasMember(String identifier) {
         Objects.requireNonNull(identifier, "identifier");
-        return impl.hasMember(receiver, identifier);
+        return dispatch.hasMember(this.context, receiver, identifier);
     }
 
     /**
@@ -744,7 +751,7 @@ public final class Value {
      */
     public Value getMember(String identifier) {
         Objects.requireNonNull(identifier, "identifier");
-        return impl.getMember(receiver, identifier);
+        return dispatch.getMember(this.context, receiver, identifier);
     }
 
     /**
@@ -761,7 +768,7 @@ public final class Value {
      * @since 19.0
      */
     public Set<String> getMemberKeys() {
-        return impl.getMemberKeys(receiver);
+        return dispatch.getMemberKeys(this.context, receiver);
     }
 
     /**
@@ -779,7 +786,7 @@ public final class Value {
      */
     public void putMember(String identifier, Object value) {
         Objects.requireNonNull(identifier, "identifier");
-        impl.putMember(receiver, identifier, value);
+        dispatch.putMember(this.context, receiver, identifier, value);
     }
 
     /**
@@ -795,7 +802,7 @@ public final class Value {
      */
     public boolean removeMember(String identifier) {
         Objects.requireNonNull(identifier, "identifier");
-        return impl.removeMember(receiver, identifier);
+        return dispatch.removeMember(this.context, receiver, identifier);
     }
 
     // executable
@@ -808,7 +815,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean canExecute() {
-        return impl.canExecute(receiver);
+        return dispatch.canExecute(this.context, receiver);
     }
 
     /**
@@ -829,9 +836,9 @@ public final class Value {
     public Value execute(Object... arguments) {
         if (arguments.length == 0) {
             // specialized entry point for zero argument execute calls
-            return impl.execute(receiver);
+            return dispatch.execute(this.context, receiver);
         } else {
-            return impl.execute(receiver, arguments);
+            return dispatch.execute(this.context, receiver, arguments);
         }
     }
 
@@ -851,9 +858,9 @@ public final class Value {
     public void executeVoid(Object... arguments) {
         if (arguments.length == 0) {
             // specialized entry point for zero argument execute calls
-            impl.executeVoid(receiver);
+            dispatch.executeVoid(this.context, receiver);
         } else {
-            impl.executeVoid(receiver, arguments);
+            dispatch.executeVoid(this.context, receiver, arguments);
         }
     }
 
@@ -866,7 +873,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean canInstantiate() {
-        return impl.canInstantiate(receiver);
+        return dispatch.canInstantiate(this.context, receiver);
     }
 
     /**
@@ -883,7 +890,7 @@ public final class Value {
      */
     public Value newInstance(Object... arguments) {
         Objects.requireNonNull(arguments, "arguments");
-        return impl.newInstance(receiver, arguments);
+        return dispatch.newInstance(this.context, receiver, arguments);
     }
 
     /**
@@ -900,7 +907,7 @@ public final class Value {
      */
     public boolean canInvokeMember(String identifier) {
         Objects.requireNonNull(identifier, "identifier");
-        return impl.canInvoke(identifier, receiver);
+        return dispatch.canInvoke(this.context, identifier, receiver);
     }
 
     /**
@@ -922,9 +929,9 @@ public final class Value {
         Objects.requireNonNull(identifier, "identifier");
         if (arguments.length == 0) {
             // specialized entry point for zero argument invoke calls
-            return impl.invoke(receiver, identifier);
+            return dispatch.invoke(this.context, receiver, identifier);
         } else {
-            return impl.invoke(receiver, identifier, arguments);
+            return dispatch.invoke(this.context, receiver, identifier, arguments);
         }
     }
 
@@ -936,7 +943,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean isString() {
-        return impl.isString(receiver);
+        return dispatch.isString(this.context, receiver);
     }
 
     /**
@@ -949,7 +956,7 @@ public final class Value {
      * @since 19.0
      */
     public String asString() {
-        return impl.asString(receiver);
+        return dispatch.asString(this.context, receiver);
     }
 
     /**
@@ -962,7 +969,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean fitsInInt() {
-        return impl.fitsInInt(receiver);
+        return dispatch.fitsInInt(this.context, receiver);
     }
 
     /**
@@ -976,7 +983,7 @@ public final class Value {
      * @since 19.0
      */
     public int asInt() {
-        return impl.asInt(receiver);
+        return dispatch.asInt(this.context, receiver);
     }
 
     /**
@@ -988,7 +995,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean isBoolean() {
-        return impl.isBoolean(receiver);
+        return dispatch.isBoolean(this.context, receiver);
     }
 
     /**
@@ -1002,7 +1009,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean asBoolean() {
-        return impl.asBoolean(receiver);
+        return dispatch.asBoolean(this.context, receiver);
     }
 
     /**
@@ -1016,7 +1023,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean isNumber() {
-        return impl.isNumber(receiver);
+        return dispatch.isNumber(this.context, receiver);
     }
 
     /**
@@ -1029,7 +1036,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean fitsInLong() {
-        return impl.fitsInLong(receiver);
+        return dispatch.fitsInLong(this.context, receiver);
     }
 
     /**
@@ -1043,7 +1050,7 @@ public final class Value {
      * @since 19.0
      */
     public long asLong() {
-        return impl.asLong(receiver);
+        return dispatch.asLong(this.context, receiver);
     }
 
     /**
@@ -1056,7 +1063,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean fitsInDouble() {
-        return impl.fitsInDouble(receiver);
+        return dispatch.fitsInDouble(this.context, receiver);
     }
 
     /**
@@ -1070,7 +1077,7 @@ public final class Value {
      * @since 19.0
      */
     public double asDouble() {
-        return impl.asDouble(receiver);
+        return dispatch.asDouble(this.context, receiver);
     }
 
     /**
@@ -1083,7 +1090,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean fitsInFloat() {
-        return impl.fitsInFloat(receiver);
+        return dispatch.fitsInFloat(this.context, receiver);
     }
 
     /**
@@ -1097,7 +1104,7 @@ public final class Value {
      * @since 19.0
      */
     public float asFloat() {
-        return impl.asFloat(receiver);
+        return dispatch.asFloat(this.context, receiver);
     }
 
     /**
@@ -1110,7 +1117,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean fitsInByte() {
-        return impl.fitsInByte(receiver);
+        return dispatch.fitsInByte(this.context, receiver);
     }
 
     /**
@@ -1124,7 +1131,7 @@ public final class Value {
      * @since 19.0
      */
     public byte asByte() {
-        return impl.asByte(receiver);
+        return dispatch.asByte(this.context, receiver);
     }
 
     /**
@@ -1137,7 +1144,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean fitsInShort() {
-        return impl.fitsInShort(receiver);
+        return dispatch.fitsInShort(this.context, receiver);
     }
 
     /**
@@ -1151,7 +1158,7 @@ public final class Value {
      * @since 19.0
      */
     public short asShort() {
-        return impl.asShort(receiver);
+        return dispatch.asShort(this.context, receiver);
     }
 
     /**
@@ -1162,7 +1169,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean isNull() {
-        return impl.isNull(receiver);
+        return dispatch.isNull(this.context, receiver);
     }
 
     /**
@@ -1174,7 +1181,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean isNativePointer() {
-        return impl.isNativePointer(receiver);
+        return dispatch.isNativePointer(this.context, receiver);
     }
 
     /**
@@ -1186,7 +1193,7 @@ public final class Value {
      * @since 19.0
      */
     public long asNativePointer() {
-        return impl.asNativePointer(receiver);
+        return dispatch.asNativePointer(this.context, receiver);
     }
 
     /**
@@ -1198,7 +1205,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean isHostObject() {
-        return impl.isHostObject(receiver);
+        return dispatch.isHostObject(this.context, receiver);
     }
 
     /**
@@ -1211,7 +1218,7 @@ public final class Value {
      */
     @SuppressWarnings("unchecked")
     public <T> T asHostObject() {
-        return (T) impl.asHostObject(receiver);
+        return (T) dispatch.asHostObject(this.context, receiver);
     }
 
     /**
@@ -1223,7 +1230,7 @@ public final class Value {
      * @since 19.0
      */
     public boolean isProxyObject() {
-        return impl.isProxyObject(receiver);
+        return dispatch.isProxyObject(this.context, receiver);
     }
 
     /**
@@ -1237,7 +1244,7 @@ public final class Value {
      */
     @SuppressWarnings("unchecked")
     public <T extends Proxy> T asProxyObject() {
-        return (T) impl.asProxyObject(receiver);
+        return (T) dispatch.asProxyObject(this.context, receiver);
     }
 
     /**
@@ -1369,18 +1376,27 @@ public final class Value {
      * assert context.eval("js", "42").as(Integer.class) == 42;
      * assert context.eval("js", "({foo:'bar'})").as(Map.class).get("foo").equals("bar");
      * assert context.eval("js", "[42]").as(List.class).get(0).equals(42);
-     * assert ((Map&lt;String, Object>)context.eval("js", "[{foo:'bar'}]").as(List.class).get(0)).get("foo").equals("bar");
+     * assert ((Map&lt;String, Object>) context.eval("js", "[{foo:'bar'}]").as(List.class).get(0)).get("foo").equals("bar");
      *
-     * &#64;FunctionalInterface interface IntFunction { int foo(int value); }
+     * &#64;FunctionalInterface
+     * interface IntFunction {
+     *     int foo(int value);
+     * }
      * assert context.eval("js", "(function(a){return a})").as(IntFunction.class).foo(42).asInt() == 42;
      *
-     * &#64;FunctionalInterface interface StringListFunction { int foo(List&lt;String&gt; value); }
-     * assert context.eval("js", "(function(a){return a.length})")
-     *               .as(StringListFunction.class).foo(new String[]{"42"}).asInt() == 1;
+     * &#64;FunctionalInterface
+     * interface StringListFunction {
+     *     int foo(List&lt;String&gt; value);
+     * }
+     * assert context.eval("js", "(function(a){return a.length})").as(StringListFunction.class).foo(new String[]{"42"}).asInt() == 1;
      *
-     * public abstract class AbstractClass { public AbstractClass() {} int foo(int value); }
-     * assert context.eval("js", "({foo: function(a){return a}})")
-     *               .as(AbstractClass.class).foo(42).asInt() == 42;
+     * public abstract class AbstractClass {
+     *     public AbstractClass() {
+     *     }
+     *
+     *     int foo(int value);
+     * }
+     * assert context.eval("js", "({foo: function(a){return a}})").as(AbstractClass.class).foo(42).asInt() == 42;
      * </pre>
      *
      * <h3>Object target type mapping</h3>
@@ -1402,6 +1418,12 @@ public final class Value {
      * any Number subclass including {@link BigInteger} or {@link BigDecimal}. It is recommended to
      * cast to {@link Number} and then convert to a Java primitive like with
      * {@link Number#longValue()}.
+     * <li>If the value has {@link #hasArrayElements() array elements} and it has an
+     * {@link Value#getArraySize() array size} that is smaller or equal than
+     * {@link Integer#MAX_VALUE} then the result value will implement {@link List}. Every array
+     * element of the value maps to one list element. The size of the returned list maps to the
+     * array size of the value. The returned value may also implement {@link Function} if the value
+     * can be {@link #canExecute() executed} or {@link #canInstantiate() instantiated}.
      * <li>If the value has {@link #hasHashEntries() hash entries} then the result value will
      * implement {@link Map}. The {@link Map#size() size} of the returned {@link Map} is equal to
      * the {@link #getHashSize() hash entries count}. The returned value may also implement
@@ -1412,12 +1434,6 @@ public final class Value {
      * using {@link String} keys. The {@link Map#size() size} of the returned {@link Map} is equal
      * to the count of all members. The returned value may also implement {@link Function} if the
      * value can be {@link #canExecute() executed} or {@link #canInstantiate() instantiated}.
-     * <li>If the value has {@link #hasArrayElements() array elements} and it has an
-     * {@link Value#getArraySize() array size} that is smaller or equal than
-     * {@link Integer#MAX_VALUE} then the result value will implement {@link List}. Every array
-     * element of the value maps to one list element. The size of the returned list maps to the
-     * array size of the value. The returned value may also implement {@link Function} if the value
-     * can be {@link #canExecute() executed} or {@link #canInstantiate() instantiated}.
      * <li>If the value has an {@link #hasIterator()} iterator} then the result value will implement
      * {@link Iterable}. The returned value may also implement {@link Function} if the value can be
      * {@link #canExecute() executed} or {@link #canInstantiate() instantiated}.
@@ -1428,8 +1444,9 @@ public final class Value {
      * instantiated} then the result value implements {@link Function Function}. By default the
      * argument of the function will be used as single argument to the function when executed. If a
      * value of type {@link Object Object[]} is provided then the function will be executed with
-     * those arguments. The returned function may also implement {@link Map} if the value has
-     * {@link #hasArrayElements() array elements} or {@link #hasMembers() members}.
+     * those arguments. The returned function may also implement {@link List} or {@link Map} if the
+     * value has {@link #hasArrayElements() array elements} or {@link #hasMembers() members},
+     * respectively.
      * <li>If none of the above rules apply then this {@link Value} instance is returned.
      * </ol>
      * Returned {@link #isHostObject() host objects}, {@link String}, {@link Number},
@@ -1486,7 +1503,7 @@ public final class Value {
         if (targetType == Value.class) {
             return (T) this;
         }
-        return impl.as(receiver, targetType);
+        return dispatch.as(this.context, receiver, targetType);
     }
 
     /**
@@ -1512,7 +1529,7 @@ public final class Value {
      */
     public <T> T as(TypeLiteral<T> targetType) {
         Objects.requireNonNull(targetType, "targetType");
-        return impl.as(receiver, targetType);
+        return dispatch.as(this.context, receiver, targetType);
     }
 
     /**
@@ -1526,7 +1543,7 @@ public final class Value {
      */
     @Override
     public String toString() {
-        return impl.toString(receiver);
+        return super.toString();
     }
 
     /**
@@ -1536,7 +1553,7 @@ public final class Value {
      * @since 19.0
      */
     public SourceSection getSourceLocation() {
-        return impl.getSourceLocation(receiver);
+        return dispatch.getSourceLocation(this.context, receiver);
     }
 
     /**
@@ -1551,7 +1568,7 @@ public final class Value {
      * @since 19.2.0
      */
     public boolean isDate() {
-        return impl.isDate(receiver);
+        return dispatch.isDate(this.context, receiver);
     }
 
     /**
@@ -1566,7 +1583,7 @@ public final class Value {
      * @since 19.2.0
      */
     public LocalDate asDate() {
-        return impl.asDate(receiver);
+        return dispatch.asDate(this.context, receiver);
     }
 
     /**
@@ -1578,7 +1595,7 @@ public final class Value {
      * @since 19.2.0
      */
     public boolean isTime() {
-        return impl.isTime(receiver);
+        return dispatch.isTime(this.context, receiver);
     }
 
     /**
@@ -1593,7 +1610,7 @@ public final class Value {
      * @since 19.2.0
      */
     public LocalTime asTime() {
-        return impl.asTime(receiver);
+        return dispatch.asTime(this.context, receiver);
     }
 
     /**
@@ -1643,7 +1660,7 @@ public final class Value {
      * @since 19.2.0
      */
     public Instant asInstant() {
-        return impl.asInstant(receiver);
+        return dispatch.asInstant(this.context, receiver);
     }
 
     /**
@@ -1668,7 +1685,7 @@ public final class Value {
      * @since 19.2.0
      */
     public boolean isTimeZone() {
-        return impl.isTimeZone(receiver);
+        return dispatch.isTimeZone(this.context, receiver);
     }
 
     /**
@@ -1682,7 +1699,7 @@ public final class Value {
      * @since 19.2.0
      */
     public ZoneId asTimeZone() {
-        return impl.asTimeZone(receiver);
+        return dispatch.asTimeZone(this.context, receiver);
     }
 
     /**
@@ -1694,7 +1711,7 @@ public final class Value {
      * @since 19.2.0
      */
     public boolean isDuration() {
-        return impl.isDuration(receiver);
+        return dispatch.isDuration(this.context, receiver);
     }
 
     /**
@@ -1708,7 +1725,7 @@ public final class Value {
      * @since 19.2.0
      */
     public Duration asDuration() {
-        return impl.asDuration(receiver);
+        return dispatch.asDuration(this.context, receiver);
     }
 
     /**
@@ -1719,7 +1736,7 @@ public final class Value {
      * @since 19.3
      */
     public boolean isException() {
-        return impl.isException(receiver);
+        return dispatch.isException(this.context, receiver);
     }
 
     /**
@@ -1731,7 +1748,7 @@ public final class Value {
      * @since 19.3
      */
     public RuntimeException throwException() {
-        return impl.throwException(receiver);
+        return dispatch.throwException(this.context, receiver);
     }
 
     /**
@@ -1749,7 +1766,12 @@ public final class Value {
      * @since 19.3.0
      */
     public Context getContext() {
-        return impl.getContext();
+        Context c = dispatch.getContext(this.context);
+        if (c != null && c.currentAPI != null) {
+            return c.currentAPI;
+        } else {
+            return c;
+        }
     }
 
     /**
@@ -1762,10 +1784,7 @@ public final class Value {
      */
     @Override
     public boolean equals(Object obj) {
-        if (!(obj instanceof Value)) {
-            return false;
-        }
-        return impl.equalsImpl(receiver, ((Value) obj).receiver);
+        return super.equals(obj);
     }
 
     /**
@@ -1778,7 +1797,7 @@ public final class Value {
      */
     @Override
     public int hashCode() {
-        return impl.hashCodeImpl(receiver);
+        return super.hashCode();
     }
 
     /**
@@ -1792,7 +1811,7 @@ public final class Value {
      * @since 21.1
      */
     public boolean hasIterator() {
-        return impl.hasIterator(receiver);
+        return dispatch.hasIterator(this.context, receiver);
     }
 
     /**
@@ -1807,7 +1826,7 @@ public final class Value {
      * @since 21.1
      */
     public Value getIterator() {
-        return impl.getIterator(receiver);
+        return dispatch.getIterator(this.context, receiver);
     }
 
     /**
@@ -1822,7 +1841,7 @@ public final class Value {
      * @since 21.1
      */
     public boolean isIterator() {
-        return impl.isIterator(receiver);
+        return dispatch.isIterator(this.context, receiver);
     }
 
     /**
@@ -1839,7 +1858,7 @@ public final class Value {
      * @since 21.1
      */
     public boolean hasIteratorNextElement() {
-        return impl.hasIteratorNextElement(receiver);
+        return dispatch.hasIteratorNextElement(this.context, receiver);
     }
 
     /**
@@ -1861,7 +1880,7 @@ public final class Value {
      * @since 21.1
      */
     public Value getIteratorNextElement() {
-        return impl.getIteratorNextElement(receiver);
+        return dispatch.getIteratorNextElement(this.context, receiver);
     }
 
     /**
@@ -1876,7 +1895,7 @@ public final class Value {
      * @since 21.1
      */
     public boolean hasHashEntries() {
-        return impl.hasHashEntries(receiver);
+        return dispatch.hasHashEntries(this.context, receiver);
     }
 
     /**
@@ -1889,7 +1908,7 @@ public final class Value {
      * @since 21.1
      */
     public long getHashSize() throws UnsupportedOperationException {
-        return impl.getHashSize(receiver);
+        return dispatch.getHashSize(this.context, receiver);
     }
 
     /**
@@ -1903,7 +1922,7 @@ public final class Value {
      * @since 21.1
      */
     public boolean hasHashEntry(Object key) {
-        return impl.hasHashEntry(receiver, key);
+        return dispatch.hasHashEntry(this.context, receiver, key);
     }
 
     /**
@@ -1918,7 +1937,7 @@ public final class Value {
      * @since 21.1
      */
     public Value getHashValue(Object key) throws UnsupportedOperationException {
-        return impl.getHashValue(receiver, key);
+        return dispatch.getHashValue(this.context, receiver, key);
     }
 
     /**
@@ -1933,7 +1952,7 @@ public final class Value {
      * @since 21.1
      */
     public Value getHashValueOrDefault(Object key, Object defaultValue) throws UnsupportedOperationException {
-        return impl.getHashValueOrDefault(receiver, key, defaultValue);
+        return dispatch.getHashValueOrDefault(this.context, receiver, key, defaultValue);
     }
 
     /**
@@ -1950,7 +1969,7 @@ public final class Value {
      * @since 21.1
      */
     public void putHashEntry(Object key, Object value) throws IllegalArgumentException, UnsupportedOperationException {
-        impl.putHashEntry(receiver, key, value);
+        dispatch.putHashEntry(this.context, receiver, key, value);
     }
 
     /**
@@ -1966,7 +1985,7 @@ public final class Value {
      * @since 21.1
      */
     public boolean removeHashEntry(Object key) throws UnsupportedOperationException {
-        return impl.removeHashEntry(receiver, key);
+        return dispatch.removeHashEntry(this.context, receiver, key);
     }
 
     /**
@@ -1985,7 +2004,7 @@ public final class Value {
      * @since 21.1
      */
     public Value getHashEntriesIterator() throws UnsupportedOperationException {
-        return impl.getHashEntriesIterator(receiver);
+        return dispatch.getHashEntriesIterator(this.context, receiver);
     }
 
     /**
@@ -2000,7 +2019,7 @@ public final class Value {
      * @since 21.1
      */
     public Value getHashKeysIterator() throws UnsupportedOperationException {
-        return impl.getHashKeysIterator(receiver);
+        return dispatch.getHashKeysIterator(this.context, receiver);
     }
 
     /**
@@ -2015,7 +2034,7 @@ public final class Value {
      * @since 21.1
      */
     public Value getHashValuesIterator() throws UnsupportedOperationException {
-        return impl.getHashValuesIterator(receiver);
+        return dispatch.getHashValuesIterator(this.context, receiver);
     }
 
     /**
@@ -2037,4 +2056,50 @@ public final class Value {
         return Engine.getImpl().asValue(o);
     }
 
+    /**
+     * Pins a scoped value such that it can be used beyond the scope of a scoped host method call.
+     * Pinning is an idempotent operation, i.e. pinning an already pinned value just results in a
+     * pinned value again.
+     *
+     * Trying to pin a value that is not scoped will not cause an effect. Trying to pin a scoped
+     * value that has already been released will raise a {@link IllegalStateException}.
+     *
+     * @throws IllegalStateException if the method scope of the value was finished
+     * @see HostAccess#SCOPED
+     * @since 21.3
+     */
+    public void pin() {
+        dispatch.pin(this.context, receiver);
+    }
+}
+
+abstract class AbstractValue {
+
+    final Object receiver;
+    final Object context;
+    final AbstractValueDispatch dispatch;
+
+    AbstractValue(AbstractValueDispatch dispatch, Object context, Object receiver) {
+        this.context = context;
+        this.dispatch = dispatch;
+        this.receiver = receiver;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (!(obj instanceof AbstractValue)) {
+            return false;
+        }
+        return dispatch.equalsImpl(this.context, receiver, ((AbstractValue) obj).receiver);
+    }
+
+    @Override
+    public int hashCode() {
+        return dispatch.hashCodeImpl(this.context, receiver);
+    }
+
+    @Override
+    public String toString() {
+        return dispatch.toString(this.context, receiver);
+    }
 }

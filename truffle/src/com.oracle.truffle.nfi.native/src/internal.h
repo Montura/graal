@@ -58,8 +58,9 @@
 
 #define __thread __declspec(thread)
 
-#else
+#else // !_WIN32
 
+#include <stdint.h>
 #include <alloca.h>
 
 #endif
@@ -90,6 +91,8 @@ struct __TruffleContextInternal {
     jfieldID NativeString_nativePointer;
 
     jmethodID LibFFIContext_getNativeEnv;
+    jmethodID LibFFIContext_attachThread;
+    jmethodID LibFFIContext_detachThread;
     jmethodID LibFFIContext_createClosureNativePointer;
     jmethodID LibFFIContext_newClosureRef;
     jmethodID LibFFIContext_releaseClosureRef;
@@ -98,6 +101,9 @@ struct __TruffleContextInternal {
     jfieldID RetPatches_count;
     jfieldID RetPatches_patches;
     jfieldID RetPatches_objects;
+
+    jclass NativeArgumentBuffer_Pointer;
+    jfieldID NativeArgumentBuffer_Pointer_pointer;
 
     jclass Object;
     jclass String;

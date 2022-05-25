@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -27,23 +27,29 @@ package org.graalvm.compiler.replacements.nodes;
 import static org.graalvm.compiler.core.common.GraalOptions.UseGraalStubs;
 import static org.graalvm.compiler.nodeinfo.InputType.Memory;
 
+import org.graalvm.compiler.core.common.GraalOptions;
 import org.graalvm.compiler.core.common.spi.ForeignCallLinkage;
 import org.graalvm.compiler.core.common.type.StampFactory;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.nodeinfo.NodeCycles;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodeinfo.NodeSize;
+import org.graalvm.compiler.nodes.ConstantNode;
 import org.graalvm.compiler.nodes.FixedWithNextNode;
 import org.graalvm.compiler.nodes.NamedLocationIdentity;
+import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValueNodeUtil;
 import org.graalvm.compiler.nodes.memory.MemoryAccess;
 import org.graalvm.compiler.nodes.memory.MemoryKill;
+import org.graalvm.compiler.nodes.spi.Canonicalizable;
+import org.graalvm.compiler.nodes.spi.CanonicalizerTool;
 import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
+import org.graalvm.compiler.nodes.util.ConstantReflectionUtil;
 import org.graalvm.word.LocationIdentity;
-import org.graalvm.word.Pointer;
 
+import jdk.vm.ci.meta.ConstantReflectionProvider;
 import jdk.vm.ci.meta.JavaKind;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.Value;
@@ -51,63 +57,113 @@ import jdk.vm.ci.meta.Value;
 // JaCoCo Exclude
 
 /**
- * Compares two array regions with a given length.
+ * Compares two array regions with a given length. This node can compare regions of arrays of the
+ * same primitive element kinds. As a special case, it also supports comparing an array region
+ * interpreted as {@code char}s with an array region interpreted as {@code byte}s, in which case the
+ * {@code byte} values are zero-extended for the comparison. In this case, the first kind must be
+ * {@code char}, and the underlying array must be a {@code byte} array (this condition is not
+ * checked). Other combinations of kinds are currently not allowed.
  */
 @NodeInfo(cycles = NodeCycles.CYCLES_UNKNOWN, size = NodeSize.SIZE_128)
-public class ArrayRegionEqualsNode extends FixedWithNextNode implements LIRLowerable, MemoryAccess {
+public class ArrayRegionEqualsNode extends FixedWithNextNode implements Canonicalizable, LIRLowerable, MemoryAccess, ConstantReflectionUtil.ArrayBaseOffsetProvider {
 
     public static final NodeClass<ArrayRegionEqualsNode> TYPE = NodeClass.create(ArrayRegionEqualsNode.class);
 
     /** {@link JavaKind} of the arrays to compare. */
-    protected final JavaKind kind1;
-    protected final JavaKind kind2;
+    protected final JavaKind strideA;
+    protected final JavaKind strideB;
+    protected final LocationIdentity locationIdentity;
 
-    /** Pointer to first array region to be tested for equality. */
-    @Input protected ValueNode array1;
+    /**
+     * Pointer to the first array object.
+     */
+    @Input protected ValueNode arrayA;
 
-    /** Pointer to second array region to be tested for equality. */
-    @Input protected ValueNode array2;
+    /**
+     * Byte offset to be added to the first array pointer. Must include the array's base offset!
+     */
+    @Input protected ValueNode offsetA;
 
-    /** Length of the array region. */
+    /**
+     * Pointer to the second array object.
+     */
+    @Input protected ValueNode arrayB;
+
+    /**
+     * Byte offset to be added to the second array pointer. Must include the array's base offset!
+     */
+    @Input protected ValueNode offsetB;
+
+    /**
+     * Length of the array region.
+     */
     @Input protected ValueNode length;
 
     @OptionalInput(Memory) protected MemoryKill lastLocationAccess;
 
-    public ArrayRegionEqualsNode(ValueNode array1, ValueNode array2, ValueNode length, @ConstantNodeParameter JavaKind kind1, @ConstantNodeParameter JavaKind kind2) {
-        this(TYPE, array1, array2, length, kind1, kind2);
+    public ArrayRegionEqualsNode(ValueNode arrayA, ValueNode offsetA, ValueNode arrayB, ValueNode offsetB, ValueNode length, JavaKind strideA, JavaKind strideB, LocationIdentity locationIdentity) {
+        this(TYPE, arrayA, offsetA, arrayB, offsetB, length, strideA, strideB, locationIdentity);
     }
 
-    protected ArrayRegionEqualsNode(NodeClass<? extends ArrayRegionEqualsNode> c, ValueNode array1, ValueNode array2, ValueNode length, @ConstantNodeParameter JavaKind kind1,
-                    @ConstantNodeParameter JavaKind kind2) {
+    public ArrayRegionEqualsNode(ValueNode arrayA, ValueNode offsetA, ValueNode arrayB, ValueNode offsetB, ValueNode length,
+                    @ConstantNodeParameter JavaKind strideA,
+                    @ConstantNodeParameter JavaKind strideB) {
+        this(TYPE, arrayA, offsetA, arrayB, offsetB, length, strideA, strideB, strideA != strideB ? LocationIdentity.ANY_LOCATION : NamedLocationIdentity.getArrayLocation(strideA));
+    }
+
+    protected ArrayRegionEqualsNode(NodeClass<? extends ArrayRegionEqualsNode> c, ValueNode arrayA, ValueNode offsetA, ValueNode arrayB, ValueNode offsetB, ValueNode length,
+                    JavaKind strideA,
+                    JavaKind strideB,
+                    LocationIdentity locationIdentity) {
         super(c, StampFactory.forKind(JavaKind.Boolean));
-        this.kind1 = kind1;
-        this.kind2 = kind2;
-        this.array1 = array1;
-        this.array2 = array2;
+        this.strideA = strideA;
+        this.strideB = strideB;
+        this.locationIdentity = locationIdentity;
+        this.arrayA = arrayA;
+        this.offsetA = offsetA;
+        this.arrayB = arrayB;
+        this.offsetB = offsetB;
         this.length = length;
+        assert strideA.isPrimitive() && strideB.isPrimitive() : "expected primitive kinds, got: " + strideA + ", " + strideB;
+        assert assertStrideGreaterOrEqual(strideA, strideB) : "expected equal kinds or char+byte or int+byte or int+char, got: " + strideA + ", " + strideB;
     }
 
-    public static boolean regionEquals(Pointer array1, Pointer array2, int length, @ConstantNodeParameter JavaKind kind) {
-        return regionEquals(array1, array2, length, kind, kind);
+    public static boolean assertStrideGreaterOrEqual(JavaKind strideA, JavaKind strideB) {
+        return strideA == strideB ||
+                        (strideA == JavaKind.Char && strideB == JavaKind.Byte) ||
+                        (strideA == JavaKind.Int && strideB == JavaKind.Byte) ||
+                        (strideA == JavaKind.Int && strideB == JavaKind.Char);
+    }
+
+    public static boolean regionEquals(Object arrayA, long offsetA, Object arrayB, long offsetB, int length, @ConstantNodeParameter JavaKind kind) {
+        return regionEquals(arrayA, offsetA, arrayB, offsetB, length, kind, kind);
     }
 
     @NodeIntrinsic
-    public static native boolean regionEquals(Pointer array1, Pointer array2, int length, @ConstantNodeParameter JavaKind kind1, @ConstantNodeParameter JavaKind kind2);
+    public static native boolean regionEquals(Object arrayA, long offsetA, Object arrayB, long offsetB, int length, @ConstantNodeParameter JavaKind kind1, @ConstantNodeParameter JavaKind kind2);
 
-    public ValueNode getArray1() {
-        return array1;
+    public ValueNode getArrayA() {
+        return arrayA;
     }
 
-    public ValueNode getArray2() {
-        return array2;
+    public ValueNode getOffsetA() {
+        return offsetA;
     }
 
-    public JavaKind getKind1() {
-        return kind1;
+    public ValueNode getArrayB() {
+        return arrayB;
     }
 
-    public JavaKind getKind2() {
-        return kind2;
+    public ValueNode getOffsetB() {
+        return offsetB;
+    }
+
+    public JavaKind getStrideA() {
+        return strideA;
+    }
+
+    public JavaKind getStrideB() {
+        return strideB;
     }
 
     public ValueNode getLength() {
@@ -119,7 +175,7 @@ public class ArrayRegionEqualsNode extends FixedWithNextNode implements LIRLower
         if (UseGraalStubs.getValue(graph().getOptions())) {
             ForeignCallLinkage linkage = gen.lookupGraalStub(this);
             if (linkage != null) {
-                Value result = gen.getLIRGeneratorTool().emitForeignCall(linkage, null, gen.operand(array1), gen.operand(array2), gen.operand(length));
+                Value result = gen.getLIRGeneratorTool().emitForeignCall(linkage, null, gen.operand(arrayA), gen.operand(offsetA), gen.operand(arrayB), gen.operand(offsetB), gen.operand(length));
                 gen.setResult(this, result);
                 return;
             }
@@ -127,22 +183,26 @@ public class ArrayRegionEqualsNode extends FixedWithNextNode implements LIRLower
         generateArrayRegionEquals(gen);
     }
 
+    @Override
+    public int getArrayBaseOffset(MetaAccessProvider metaAccess, @SuppressWarnings("unused") ValueNode array, JavaKind elementKind) {
+        return metaAccess.getArrayBaseOffset(elementKind);
+    }
+
     protected void generateArrayRegionEquals(NodeLIRBuilderTool gen) {
         Value result;
-        MetaAccessProvider metaAccess = gen.getLIRGeneratorTool().getMetaAccess();
-        int array1BaseOffset = metaAccess.getArrayBaseOffset(kind1);
-        int array2BaseOffset = metaAccess.getArrayBaseOffset(kind2);
-        if (kind1 == kind2) {
-            result = gen.getLIRGeneratorTool().emitArrayEquals(kind1, array1BaseOffset, array2BaseOffset, gen.operand(array1), gen.operand(array2), gen.operand(length), true);
+        if (strideA == strideB) {
+            result = gen.getLIRGeneratorTool().emitArrayEquals(strideA,
+                            0, 0, gen.operand(arrayA), gen.operand(offsetA), gen.operand(arrayB), gen.operand(offsetB), gen.operand(length));
         } else {
-            result = gen.getLIRGeneratorTool().emitArrayEquals(kind1, kind2, array1BaseOffset, array2BaseOffset, gen.operand(array1), gen.operand(array2), gen.operand(length), true);
+            result = gen.getLIRGeneratorTool().emitArrayEquals(strideA, strideB,
+                            0, 0, gen.operand(arrayA), gen.operand(offsetA), gen.operand(arrayB), gen.operand(offsetB), gen.operand(length));
         }
         gen.setResult(this, result);
     }
 
     @Override
     public LocationIdentity getLocationIdentity() {
-        return kind1 != kind2 ? LocationIdentity.ANY_LOCATION : NamedLocationIdentity.getArrayLocation(kind1);
+        return locationIdentity;
     }
 
     @Override
@@ -156,4 +216,32 @@ public class ArrayRegionEqualsNode extends FixedWithNextNode implements LIRLower
         lastLocationAccess = lla;
     }
 
+    @Override
+    public ValueNode canonical(CanonicalizerTool tool) {
+        if (length.isJavaConstant()) {
+            int len = length.asJavaConstant().asInt();
+            if (len * Math.max(strideA.getByteCount(), strideB.getByteCount()) < GraalOptions.ArrayRegionEqualsConstantLimit.getValue(tool.getOptions()) &&
+                            ConstantReflectionUtil.canFoldReads(tool, arrayA, offsetA, strideA, len, this) &&
+                            ConstantReflectionUtil.canFoldReads(tool, arrayB, offsetB, strideB, len, this)) {
+                Integer startIndex1 = ConstantReflectionUtil.startIndex(tool, arrayA, offsetA.asJavaConstant(), strideA, this);
+                Integer startIndex2 = ConstantReflectionUtil.startIndex(tool, arrayB, offsetB.asJavaConstant(), strideB, this);
+                return ConstantNode.forBoolean(arrayRegionEquals(tool, arrayA, startIndex1, arrayB, startIndex2, len));
+            }
+        }
+        return this;
+    }
+
+    protected boolean arrayRegionEquals(CanonicalizerTool tool, ValueNode a, int startIndexA, ValueNode b, int startIndexB, int len) {
+        JavaKind arrayKindA = a.stamp(NodeView.DEFAULT).javaType(tool.getMetaAccess()).getComponentType().getJavaKind();
+        JavaKind arrayKindB = b.stamp(NodeView.DEFAULT).javaType(tool.getMetaAccess()).getComponentType().getJavaKind();
+        ConstantReflectionProvider constantReflection = tool.getConstantReflection();
+        for (int i = 0; i < len; i++) {
+            int valueA = ConstantReflectionUtil.readTypePunned(constantReflection, a.asJavaConstant(), arrayKindA, strideA, startIndexA + i);
+            int valueB = ConstantReflectionUtil.readTypePunned(constantReflection, b.asJavaConstant(), arrayKindB, strideB, startIndexB + i);
+            if (valueA != valueB) {
+                return false;
+            }
+        }
+        return true;
+    }
 }

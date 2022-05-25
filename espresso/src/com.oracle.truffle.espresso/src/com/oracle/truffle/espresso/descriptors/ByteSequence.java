@@ -23,11 +23,11 @@
 package com.oracle.truffle.espresso.descriptors;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.Objects;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
-import com.oracle.truffle.espresso.impl.Stable;
 import com.oracle.truffle.espresso.jni.ModifiedUtf8;
 import com.oracle.truffle.espresso.meta.EspressoError;
 
@@ -36,12 +36,11 @@ import com.oracle.truffle.espresso.meta.EspressoError;
  * provides uniform, read-only access to different kinds of <code>byte</code> sequences. Implements
  * a slice "view" over a byte array.
  */
-// TODO(peterssen): Should not be public.
 public abstract class ByteSequence {
 
     protected final int hashCode;
 
-    @Stable @CompilationFinal(dimensions = 1) //
+    @CompilationFinal(dimensions = 1) //
     protected final byte[] value;
 
     public static final ByteSequence EMPTY = ByteSequence.create("");
@@ -89,6 +88,19 @@ public abstract class ByteSequence {
         return ByteSequence.wrap(bytes, 0, bytes.length);
     }
 
+    public static ByteSequence from(ByteBuffer buffer) {
+        int length = buffer.remaining();
+        if (buffer.hasArray()) {
+            int offset = buffer.position() + buffer.arrayOffset();
+            byte[] array = buffer.array();
+            return wrap(array, offset, length);
+        } else {
+            byte[] data = new byte[length];
+            buffer.get(data);
+            return wrap(data);
+        }
+    }
+
     /**
      * Returns the length of this byte sequence. The length is the number of <code>byte</code>s in
      * the sequence.
@@ -113,6 +125,10 @@ public abstract class ByteSequence {
      */
     public byte byteAt(int index) {
         return value[index + offset()];
+    }
+
+    public int unsignedByteAt(int index) {
+        return byteAt(index) & 0xff;
     }
 
     final byte[] getUnderlyingBytes() {
@@ -164,6 +180,18 @@ public abstract class ByteSequence {
         }
     }
 
+    private static final char[] HEX = "0123456789abcdef".toCharArray();
+
+    public String toHexString() {
+        StringBuilder r = new StringBuilder(length() * 2);
+        for (int i = 0; i < length(); ++i) {
+            byte b = byteAt(i);
+            r.append(HEX[(b >> 4) & 0xf]);
+            r.append(HEX[b & 0xf]);
+        }
+        return r.toString();
+    }
+
     public int lastIndexOf(byte b) {
         for (int i = length() - 1; i >= 0; i--) {
             if (byteAt(i) == b) {
@@ -181,5 +209,43 @@ public abstract class ByteSequence {
      */
     public void writeTo(byte[] dest, int index) {
         System.arraycopy(getUnderlyingBytes(), offset(), dest, index, length());
+    }
+
+    static void writePositiveIntegerString(int v, byte[] dest, int offset, int length) {
+        assert length == positiveIntegerStringSize(v);
+        int i = v;
+        int digit = length;
+        // in '456', '4' is digit 1, '5' is digit 2, etc.
+        while (i >= 10) {
+            int q = i / 10;
+            int r = i - (10 * q);
+            dest[offset + --digit] = (byte) ('0' + r);
+            i = q;
+        }
+        assert digit == 1;
+        dest[offset] = (byte) ('0' + i);
+    }
+
+    static int positiveIntegerStringSize(int x) {
+        assert x >= 0;
+        int p = 10;
+        for (int i = 1; i < 10; i++) {
+            if (x < p) {
+                return i;
+            }
+            p = 10 * p;
+        }
+        return 10;
+    }
+
+    public void writeTo(ByteBuffer bb) {
+        bb.put(getUnderlyingBytes(), offset(), length());
+    }
+
+    public ByteSequence concat(ByteSequence next) {
+        byte[] data = new byte[this.length() + next.length()];
+        writeTo(data, 0);
+        next.writeTo(data, this.length());
+        return wrap(data);
     }
 }

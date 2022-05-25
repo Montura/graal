@@ -40,15 +40,18 @@
  */
 package org.graalvm.wasm;
 
+import org.graalvm.wasm.exception.Failure;
+import org.graalvm.wasm.exception.WasmException;
+
+import com.oracle.truffle.api.CompilerAsserts;
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleLanguage;
+import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.interop.InteropLibrary;
 import com.oracle.truffle.api.interop.TruffleObject;
 import com.oracle.truffle.api.interop.UnsupportedMessageException;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
-import org.graalvm.wasm.exception.Failure;
-import org.graalvm.wasm.exception.WasmException;
 
 @ExportLibrary(InteropLibrary.class)
 @SuppressWarnings({"unused", "static-method"})
@@ -66,6 +69,7 @@ public class WasmType implements TruffleObject {
     public static final WasmType VOID = new WasmType("void");
 
     public static String toString(int valueType) {
+        CompilerAsserts.neverPartOfCompilation();
         switch (valueType) {
             case I32_TYPE:
                 return "i32";
@@ -75,6 +79,8 @@ public class WasmType implements TruffleObject {
                 return "f32";
             case F64_TYPE:
                 return "f64";
+            case VOID_TYPE:
+                return "void";
             default:
                 throw WasmException.create(Failure.UNSPECIFIED_INTERNAL, null, "Unknown value type: 0x" + Integer.toHexString(valueType));
         }
@@ -121,5 +127,21 @@ public class WasmType implements TruffleObject {
     @TruffleBoundary
     public String toString() {
         return "wasm-value-type[" + name + "]";
+    }
+
+    public static FrameSlotKind asFrameSlotKind(byte type) {
+        CompilerAsserts.neverPartOfCompilation();
+        switch (type) {
+            case I32_TYPE:
+                return FrameSlotKind.Int;
+            case I64_TYPE:
+                return FrameSlotKind.Long;
+            case F32_TYPE:
+                return FrameSlotKind.Float;
+            case F64_TYPE:
+                return FrameSlotKind.Double;
+            default:
+                return null;
+        }
     }
 }

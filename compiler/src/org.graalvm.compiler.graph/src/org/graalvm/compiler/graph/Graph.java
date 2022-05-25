@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -76,6 +76,13 @@ public class Graph {
     public final String name;
 
     /**
+     * Cached actual value of the {@link Options} to avoid expensive map lookup for every time a
+     * node / graph is verified.
+     */
+    public final boolean verifyGraphs;
+    public final boolean verifyGraphEdges;
+
+    /**
      * The set of nodes in the graph, ordered by {@linkplain #register(Node) registration} time.
      */
     Node[] nodes;
@@ -94,6 +101,14 @@ public class Graph {
      * The number of valid entries in {@link #nodes}.
      */
     int nodesSize;
+
+    /**
+     * The modification count driven by the {@link NodeEventListener} machinery. Only changes to
+     * edges are tracked since that captures meaningful changes to the graph. Adding or deleting
+     * nodes without changes edges can't have a material effect on the graph. Changes to other
+     * internal state of the nodes isn't captured by this count.
+     */
+    int edgeModificationCount;
 
     /**
      * Records the modification count for nodes. This is only used in assertions.
@@ -260,7 +275,7 @@ public class Graph {
      * {@link Graph} class.
      */
     @SuppressWarnings("all")
-    public static boolean isModificationCountsEnabled() {
+    public static boolean isNodeModificationCountsEnabled() {
         boolean enabled = false;
         assert enabled = true;
         return enabled;
@@ -283,10 +298,13 @@ public class Graph {
         assert debug != null;
         this.debug = debug;
 
-        if (isModificationCountsEnabled()) {
+        if (isNodeModificationCountsEnabled()) {
             nodeModCounts = new int[INITIAL_NODES_SIZE];
             nodeUsageModCounts = new int[INITIAL_NODES_SIZE];
         }
+
+        verifyGraphs = Options.VerifyGraalGraphs.getValue(options);
+        verifyGraphEdges = Options.VerifyGraalGraphEdges.getValue(options);
     }
 
     int extractOriginalNodeId(Node node) {
@@ -297,7 +315,7 @@ public class Graph {
         return id;
     }
 
-    int modCount(Node node) {
+    int getNodeModCount(Node node) {
         int id = extractOriginalNodeId(node);
         if (id >= 0 && id < nodeModCounts.length) {
             return nodeModCounts[id];
@@ -305,7 +323,7 @@ public class Graph {
         return 0;
     }
 
-    void incModCount(Node node) {
+    void incNodeModCount(Node node) {
         int id = extractOriginalNodeId(node);
         if (id >= 0) {
             if (id >= nodeModCounts.length) {
@@ -317,7 +335,7 @@ public class Graph {
         }
     }
 
-    int usageModCount(Node node) {
+    int nodeUsageModCount(Node node) {
         int id = extractOriginalNodeId(node);
         if (id >= 0 && id < nodeUsageModCounts.length) {
             return nodeUsageModCounts[id];
@@ -325,7 +343,7 @@ public class Graph {
         return 0;
     }
 
-    void incUsageModCount(Node node) {
+    void incNodeUsageModCount(Node node) {
         int id = extractOriginalNodeId(node);
         if (id >= 0) {
             if (id >= nodeUsageModCounts.length) {
@@ -335,6 +353,10 @@ public class Graph {
         } else {
             assert false;
         }
+    }
+
+    public int getEdgeModificationCount() {
+        return edgeModificationCount;
     }
 
     /**
@@ -470,17 +492,13 @@ public class Graph {
     }
 
     public <T extends Node> T addOrUnique(T node) {
+        if (node.isAlive()) {
+            return node;
+        }
         if (node.getNodeClass().valueNumberable()) {
             return uniqueHelper(node);
         }
         return add(node);
-    }
-
-    public <T extends Node> T maybeAddOrUnique(T node) {
-        if (node.isAlive()) {
-            return node;
-        }
-        return addOrUnique(node);
     }
 
     public <T extends Node> T addOrUniqueWithInputs(T node) {
@@ -572,7 +590,11 @@ public class Graph {
                     inputChanged(node);
                     break;
                 case ZERO_USAGES:
+                    GraalError.guarantee(node.isAlive(), "must be alive");
                     usagesDroppedToZero(node);
+                    if (!node.isAlive()) {
+                        throw new GraalError("%s must not kill %s", this, node);
+                    }
                     break;
                 case NODE_ADDED:
                     nodeAdded(node);
@@ -869,7 +891,7 @@ public class Graph {
      */
     public NodeIterable<Node> getNewNodes(Mark mark) {
         final int index = mark == null ? 0 : mark.getValue();
-        return new NodeIterable<Node>() {
+        return new NodeIterable<>() {
 
             @Override
             public Iterator<Node> iterator() {
@@ -884,7 +906,7 @@ public class Graph {
      * @return an {@link Iterable} providing all the live nodes.
      */
     public NodeIterable<Node> getNodes() {
-        return new NodeIterable<Node>() {
+        return new NodeIterable<>() {
 
             @Override
             public Iterator<Node> iterator() {
@@ -926,15 +948,31 @@ public class Graph {
      * of nodes is compressed such that all non-null entries precede all null entries while
      * preserving the ordering between the nodes within the list.
      */
-    public boolean maybeCompress() {
-        if (debug.isDumpEnabledForMethod() || debug.isLogEnabledForMethod()) {
+    public final boolean maybeCompress() {
+        return compress(false);
+    }
+
+    /**
+     * Minimize the memory occupied by the graph by trimming all node arrays to the minimum size.
+     * Note that this can make subsequent optimization phases run slower, because additions to the
+     * graph must re-allocate larger arrays again. So invoking this method is only beneficial if a
+     * graph is alive for a long time.
+     */
+    public final void minimizeSize() {
+        compress(true);
+    }
+
+    protected boolean compress(boolean minimizeSize) {
+        if (!minimizeSize && (debug.isDumpEnabledForMethod() || debug.isLogEnabledForMethod())) {
             return false;
         }
         int liveNodeCount = getNodeCount();
-        int liveNodePercent = liveNodeCount * 100 / nodesSize;
-        int compressionThreshold = Options.GraphCompressionThreshold.getValue(options);
-        if (compressionThreshold == 0 || liveNodePercent >= compressionThreshold) {
-            return false;
+        if (!minimizeSize) {
+            int liveNodePercent = liveNodeCount * 100 / nodesSize;
+            int compressionThreshold = Options.GraphCompressionThreshold.getValue(options);
+            if (compressionThreshold == 0 || liveNodePercent >= compressionThreshold) {
+                return false;
+            }
         }
         GraphCompressions.increment(debug);
         int nextId = 0;
@@ -953,7 +991,7 @@ public class Graph {
                 nextId++;
             }
         }
-        if (isModificationCountsEnabled()) {
+        if (isNodeModificationCountsEnabled()) {
             // This will cause any current iteration to fail with an assertion
             Arrays.fill(nodeModCounts, 0);
             Arrays.fill(nodeUsageModCounts, 0);
@@ -962,7 +1000,36 @@ public class Graph {
         compressions++;
         nodesDeletedBeforeLastCompression += nodesDeletedSinceLastCompression;
         nodesDeletedSinceLastCompression = 0;
+
+        if (minimizeSize) {
+            /* Trim the array of all alive nodes itself. */
+            nodes = trimArrayToNewSize(nodes, nextId, NodeList.EMPTY_NODE_ARRAY);
+            /* Remove deleted nodes from the linked list of Node.typeCacheNext. */
+            recomputeIterableNodeLists();
+            /* Trim node arrays used within each node. */
+            for (Node node : nodes) {
+                node.extraUsages = trimArrayToNewSize(node.extraUsages, node.extraUsagesCount, NodeList.EMPTY_NODE_ARRAY);
+                node.getNodeClass().getInputEdges().minimizeSize(node);
+                node.getNodeClass().getSuccessorEdges().minimizeSize(node);
+            }
+        }
         return true;
+    }
+
+    static <T> T[] trimArrayToNewSize(T[] input, int newSize, T[] emptyArray) {
+        assert emptyArray.length == 0;
+        if (input.length == newSize) {
+            return input;
+        }
+        for (int i = newSize; i < input.length; i++) {
+            GraalError.guarantee(input[i] == null, "removing non-null element");
+        }
+
+        if (newSize == 0) {
+            return emptyArray;
+        } else {
+            return Arrays.copyOf(input, newSize);
+        }
     }
 
     /**
@@ -973,7 +1040,7 @@ public class Graph {
      * @return an {@link Iterable} providing all the matching nodes
      */
     public <T extends Node & IterableNodeType> NodeIterable<T> getNodes(final NodeClass<T> nodeClass) {
-        return new NodeIterable<T>() {
+        return new NodeIterable<>() {
 
             @Override
             public Iterator<T> iterator() {
@@ -1161,12 +1228,11 @@ public class Graph {
         if (nodeEventListener != null) {
             nodeEventListener.event(NodeEvent.NODE_REMOVED, node);
         }
-
         // nodes aren't removed from the type cache here - they will be removed during iteration
     }
 
     public boolean verify() {
-        if (Options.VerifyGraalGraphs.getValue(options)) {
+        if (verifyGraphs) {
             for (Node node : getNodes()) {
                 try {
                     try {
@@ -1231,7 +1297,7 @@ public class Graph {
      * @param replacementsMap the replacement map (can be null if no replacement is to be performed)
      * @return a map which associates the original nodes from {@code nodes} to their duplicates
      */
-    public UnmodifiableEconomicMap<Node, Node> addDuplicates(Iterable<? extends Node> newNodes, final Graph oldGraph, int estimatedNodeCount, EconomicMap<Node, Node> replacementsMap) {
+    public EconomicMap<Node, Node> addDuplicates(Iterable<? extends Node> newNodes, final Graph oldGraph, int estimatedNodeCount, EconomicMap<Node, Node> replacementsMap) {
         DuplicationReplacement replacements;
         if (replacementsMap == null) {
             replacements = null;

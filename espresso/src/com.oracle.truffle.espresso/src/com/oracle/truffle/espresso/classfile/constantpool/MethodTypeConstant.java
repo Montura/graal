@@ -60,7 +60,7 @@ public interface MethodTypeConstant extends PoolConstant {
                 ptypes[i] = meta.resolveSymbolAndAccessCheck(paramType, accessingKlass).mirror();
             }
         } catch (EspressoException e) {
-            if (meta.java_lang_ClassNotFoundException.isAssignableFrom(e.getExceptionObject().getKlass())) {
+            if (meta.java_lang_ClassNotFoundException.isAssignableFrom(e.getGuestException().getKlass())) {
                 throw meta.throwExceptionWithMessage(meta.java_lang_NoClassDefFoundError, e.getGuestMessage());
             }
             throw e;
@@ -69,11 +69,11 @@ public interface MethodTypeConstant extends PoolConstant {
             rtype = meta.resolveSymbolAndAccessCheck(rt, accessingKlass).mirror();
         } catch (EspressoException e) {
             EspressoException rethrow = e;
-            if (meta.java_lang_ClassNotFoundException.isAssignableFrom(e.getExceptionObject().getKlass())) {
+            if (meta.java_lang_ClassNotFoundException.isAssignableFrom(e.getGuestException().getKlass())) {
                 rethrow = EspressoException.wrap(Meta.initExceptionWithMessage(meta.java_lang_NoClassDefFoundError, e.getGuestMessage()), meta);
             }
             if (failWithBME) {
-                rethrow = EspressoException.wrap(Meta.initExceptionWithCause(meta.java_lang_BootstrapMethodError, rethrow.getExceptionObject()), meta);
+                rethrow = EspressoException.wrap(Meta.initExceptionWithCause(meta.java_lang_BootstrapMethodError, rethrow.getGuestException()), meta);
             }
             throw rethrow;
         }
@@ -108,6 +108,7 @@ public interface MethodTypeConstant extends PoolConstant {
             return pool.symbolAt(descriptorIndex);
         }
 
+        @Override
         public Resolved resolve(RuntimeConstantPool pool, int index, Klass accessingKlass) {
             Symbol<Signature> sig = getSignature(pool);
             Meta meta = accessingKlass.getContext().getMeta();
@@ -138,6 +139,7 @@ public interface MethodTypeConstant extends PoolConstant {
             throw EspressoError.shouldNotReachHere("Method type already resolved !");
         }
 
+        @Override
         public Object value() {
             return resolved;
         }

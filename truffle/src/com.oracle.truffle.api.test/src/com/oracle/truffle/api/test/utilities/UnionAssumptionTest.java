@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -43,20 +43,27 @@ package com.oracle.truffle.api.test.utilities;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.oracle.truffle.api.Assumption;
 import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.nodes.InvalidAssumptionException;
-import com.oracle.truffle.api.utilities.UnionAssumption;
+import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
+@SuppressWarnings("deprecation")
 public class UnionAssumptionTest {
+
+    @BeforeClass
+    public static void runWithWeakEncapsulationOnly() {
+        TruffleTestAssumptions.assumeWeakEncapsulation();
+    }
 
     @Test
     public void testIsValid() {
         final Assumption first = Truffle.getRuntime().createAssumption("first");
         final Assumption second = Truffle.getRuntime().createAssumption("second");
-        final UnionAssumption union = new UnionAssumption(first, second);
+        final com.oracle.truffle.api.utilities.UnionAssumption union = new com.oracle.truffle.api.utilities.UnionAssumption(first, second);
         assertTrue(union.isValid());
     }
 
@@ -64,7 +71,7 @@ public class UnionAssumptionTest {
     public void testCheck() throws InvalidAssumptionException {
         final Assumption first = Truffle.getRuntime().createAssumption("first");
         final Assumption second = Truffle.getRuntime().createAssumption("second");
-        final UnionAssumption union = new UnionAssumption(first, second);
+        final com.oracle.truffle.api.utilities.UnionAssumption union = new com.oracle.truffle.api.utilities.UnionAssumption(first, second);
         union.check();
     }
 
@@ -72,7 +79,7 @@ public class UnionAssumptionTest {
     public void testFirstInvalidateIsValid() {
         final Assumption first = Truffle.getRuntime().createAssumption("first");
         final Assumption second = Truffle.getRuntime().createAssumption("second");
-        final UnionAssumption union = new UnionAssumption(first, second);
+        final com.oracle.truffle.api.utilities.UnionAssumption union = new com.oracle.truffle.api.utilities.UnionAssumption(first, second);
 
         first.invalidate();
 
@@ -83,7 +90,7 @@ public class UnionAssumptionTest {
     public void testFirstInvalidateCheck() throws InvalidAssumptionException {
         final Assumption first = Truffle.getRuntime().createAssumption("first");
         final Assumption second = Truffle.getRuntime().createAssumption("second");
-        final UnionAssumption union = new UnionAssumption(first, second);
+        final com.oracle.truffle.api.utilities.UnionAssumption union = new com.oracle.truffle.api.utilities.UnionAssumption(first, second);
 
         first.invalidate();
 
@@ -94,7 +101,7 @@ public class UnionAssumptionTest {
     public void testSecondInvalidateIsValid() {
         final Assumption first = Truffle.getRuntime().createAssumption("first");
         final Assumption second = Truffle.getRuntime().createAssumption("second");
-        final UnionAssumption union = new UnionAssumption(first, second);
+        final com.oracle.truffle.api.utilities.UnionAssumption union = new com.oracle.truffle.api.utilities.UnionAssumption(first, second);
 
         second.invalidate();
 
@@ -105,7 +112,7 @@ public class UnionAssumptionTest {
     public void testSecondInvalidateCheck() throws InvalidAssumptionException {
         final Assumption first = Truffle.getRuntime().createAssumption("first");
         final Assumption second = Truffle.getRuntime().createAssumption("second");
-        final UnionAssumption union = new UnionAssumption(first, second);
+        final com.oracle.truffle.api.utilities.UnionAssumption union = new com.oracle.truffle.api.utilities.UnionAssumption(first, second);
 
         second.invalidate();
 
@@ -116,7 +123,7 @@ public class UnionAssumptionTest {
     public void testBothInvalidateIsValid() {
         final Assumption first = Truffle.getRuntime().createAssumption("first");
         final Assumption second = Truffle.getRuntime().createAssumption("second");
-        final UnionAssumption union = new UnionAssumption(first, second);
+        final com.oracle.truffle.api.utilities.UnionAssumption union = new com.oracle.truffle.api.utilities.UnionAssumption(first, second);
 
         first.invalidate();
         second.invalidate();
@@ -128,7 +135,7 @@ public class UnionAssumptionTest {
     public void testBothInvalidateCheck() throws InvalidAssumptionException {
         final Assumption first = Truffle.getRuntime().createAssumption("first");
         final Assumption second = Truffle.getRuntime().createAssumption("second");
-        final UnionAssumption union = new UnionAssumption(first, second);
+        final com.oracle.truffle.api.utilities.UnionAssumption union = new com.oracle.truffle.api.utilities.UnionAssumption(first, second);
 
         first.invalidate();
         second.invalidate();

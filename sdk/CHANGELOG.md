@@ -2,6 +2,45 @@
 
 This changelog summarizes major changes between GraalVM SDK versions. The main focus is on APIs exported by GraalVM SDK.
 
+## Version 22.1.0
+* Changed the default [`Object` target type mapping (`Value.as(Object.class)`)](https://www.graalvm.org/sdk/javadoc/org/graalvm/polyglot/Value.html#as-java.lang.Class-) for values that have both array elements and members from `Map` to `List`.
+  Note: This is an incompatible change. Embedders relying on the dynamic type `Map` after a `Object` target type coercion will have to migrate their code.
+  The previous behavior can be restored using a custom [target type mapping](https://www.graalvm.org/sdk/javadoc/org/graalvm/polyglot/HostAccess.Builder.html#targetTypeMapping-java.lang.Class-java.lang.Class-java.util.function.Predicate-java.util.function.Function-), e.g.:
+  ```java
+  HostAccess access = HostAccess.newBuilder(HostAccess.EXPLICIT)
+          .targetTypeMapping(Value.class, Object.class, v -> v.hasMembers() && v.hasArrayElements(), v -> v.as(Map.class))
+          .build();
+  try (Context c = Context.newBuilder().hostAccess(access).build()) {
+      // run application
+  }
+  ```
+* (GR-35010) Added API for Truffle Languages (`Language#getWebsite()`) and Instruments (`Instrument#getWebsite()`) to provide website information.
+* (GR-33851) Dropped Java 8 support.
+
+## Version 22.0.0
+* (GR-31170) Native Image API: Added `WINDOWS_AARCH64` Platform.
+* (GR-33657) Native Image API: Added `CEntryPoint#include` attribute which can be used to controll if the entry point should be automatically added to the shared library.
+* (GR-22699)(EE-only) Added the ability to spawn a native-image isolate for a each `Engine` or `Context` by calling `Context.Builder.option("engine.SpawnIsolate", "true")`.  This enables heap isolation between the host and guest applications. Using isolates improves security, startup and warmup time of polyglot languages. In this mode, calls between host and guest are more costly as they need to cross a native boundary. It is recommended to use the `HostAccess.SCOPED` policy with this mode to avoid strong cyclic references between host and guest. This mode is experimental in this release and only supported for a limited set of languages. 
+
+## Version 21.3.0
+* Added the ability to share values between contexts. Please see  `Context.Builder.allowValueSharing(boolean)` for further details. 
+* (GR-20286) Polyglot API: Added support for scoped values in guest-to-host callbacks. [Scoped values](https://www.graalvm.org/reference-manual/embed-languages/#controlling-host-callback-parameter-scoping) are automatically released when the callback returns. They can be configured in `HostAccess`.
+
+## Version 21.2.0
+* `AllowVMInspection` is enabled in the native launchers, `SIGQUIT` can be used to generate thread dumps. Performance counters are disabled by default, they can be enabled in the graalvm enterprise by the `--vm.XX:+UsePerfData` option.
+* Changed behavior of `Value.as(TypeLiteral<Function<Object, Object>>).apply()`: When the function is called with an `Object[]` argument, it is passed through as a single argument rather than an array of arguments.
+* Updated the required JVMCI version for Polyglot Embeddings in this release. All GraalVM JDK versions (8, 11, 16) already contain the updated JVMCI version and there is no further action required. If you are using a different JDK than GraalVM and you have configured the Graal compiler on the upgrade module path you will need one of the following JDK versions that include [JDK-8264016](https://bugs.openjdk.java.net/browse/JDK-8264016) for full compatibility:
+
+  * Other JDK 11: Oracle JDK 11.0.13 (2021-10-19), OpenJDK is still to be determined.
+  * Other JDK 16: No current plans to update JVMCI.
+  * Other JDK 17: The new JVMCI version is already integrated into early access builds.
+
+  If your JVMCI version is outdated you will be able to use GraalVM embeddings, but forced context cancellation (`Context.close(true)`) and interrupt (`Context.interrupt(Duration)`) will throw an error. We recommend the following workarounds:
+
+  * Do not use forced context cancellation or interrupt. All other features are still supported.
+  * Switch to the fallback runtime by removing graal.jar from the upgrade-module-path. Note that this will significantly worsen performance and should only be a last resort.
+  * Wait with upgrading to 21.2 until the JDK version has support for the new JVMCI version.
+
 ## Version 21.1.0
 * Added new methods  in `Value` for interacting with buffer-like objects:
     * Added `Value.hasBufferElements()` that returns  `true` if this object supports buffer messages.

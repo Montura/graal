@@ -26,6 +26,7 @@ package com.oracle.svm.core;
 
 import static com.oracle.svm.core.Containers.Options.PreferContainerQuotaForCPUCount;
 import static com.oracle.svm.core.Containers.Options.UseContainerSupport;
+import static com.oracle.svm.core.option.RuntimeOptionKey.RuntimeOptionKeyFlag.RelevantForCompilationIsolates;
 
 import org.graalvm.compiler.options.Option;
 import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
@@ -44,7 +45,7 @@ import com.oracle.svm.core.util.VMError;
 /**
  * Provides container awareness to the rest of the VM.
  *
- * The implementation is based on the Container Metrics API from JDK 15.
+ * The implementation is based on the Container Metrics API from JDK 17.
  */
 public class Containers {
 
@@ -54,7 +55,7 @@ public class Containers {
 
         @Option(help = "Calculate the container CPU availability based on the value of quotas (if set), when true. " +
                         "Otherwise, use the CPU shares value, provided it is less than quota.")//
-        public static final RuntimeOptionKey<Boolean> PreferContainerQuotaForCPUCount = new RuntimeOptionKey<>(true);
+        public static final RuntimeOptionKey<Boolean> PreferContainerQuotaForCPUCount = new RuntimeOptionKey<>(true, RelevantForCompilationIsolates);
     }
 
     /** Sentinel used when the value is unknown. */
@@ -82,8 +83,9 @@ public class Containers {
 
     /**
      * Calculates an appropriate number of active processors for the VM to use. The calculation is
-     * based on these two inputs:
+     * based on these three inputs:
      * <ul>
+     * <li>cpu affinity
      * <li>cpu quota & cpu period
      * <li>cpu shares
      * </ul>
@@ -93,6 +95,8 @@ public class Containers {
     public static int activeProcessorCount() {
         /*-
          * Algorithm (adapted from `src/hotspot/os/linux/cgroupSubsystem_linux.cpp`):
+         *
+         * Determine the number of available CPUs from sched_getaffinity.
          *
          * If user specified a quota (quota != -1), calculate the number of
          * required CPUs by dividing quota by period.

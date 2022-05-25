@@ -28,8 +28,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.util.Providers;
@@ -45,6 +43,9 @@ import com.oracle.svm.core.genscavenge.HeapImplMemoryMXBean;
 import com.oracle.svm.core.genscavenge.ImageHeapInfo;
 import com.oracle.svm.core.genscavenge.IncrementalGarbageCollectorMXBean;
 import com.oracle.svm.core.genscavenge.LinearImageHeapLayouter;
+import com.oracle.svm.core.genscavenge.remset.CardTableBasedRememberedSet;
+import com.oracle.svm.core.genscavenge.remset.NoRememberedSet;
+import com.oracle.svm.core.genscavenge.remset.RememberedSet;
 import com.oracle.svm.core.graal.GraalFeature;
 import com.oracle.svm.core.graal.meta.RuntimeConfiguration;
 import com.oracle.svm.core.graal.meta.SubstrateForeignCallsProvider;
@@ -58,10 +59,9 @@ import com.oracle.svm.core.jdk.management.ManagementSupport;
 
 @AutomaticFeature
 class HeapFeature implements GraalFeature {
-
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        return SubstrateOptions.UseCardRememberedSetHeap.getValue();
+        return SubstrateOptions.UseSerialGC.getValue();
     }
 
     @Override
@@ -71,8 +71,10 @@ class HeapFeature implements GraalFeature {
 
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
-        ImageSingletons.add(Heap.class, new HeapImpl(access));
+        HeapImpl heap = new HeapImpl(SubstrateOptions.getPageSize());
+        ImageSingletons.add(Heap.class, heap);
         ImageSingletons.add(SubstrateAllocationSnippets.class, new GenScavengeAllocationSnippets());
+        ImageSingletons.add(RememberedSet.class, createRememberedSet());
 
         ManagementSupport managementSupport = ManagementSupport.getSingleton();
         managementSupport.addPlatformManagedObjectSingleton(java.lang.management.MemoryMXBean.class, new HeapImplMemoryMXBean());
@@ -80,29 +82,32 @@ class HeapFeature implements GraalFeature {
     }
 
     @Override
-    public void registerLowerings(RuntimeConfiguration runtimeConfig, OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers,
-                    SnippetReflectionProvider snippetReflection, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings, boolean hosted) {
-        // Even though I don't hold on to this instance, it is preserved because it becomes the
-        // enclosing instance for the lowerings registered within it.
-        BarrierSnippets barrierSnippets = new BarrierSnippets(options, factories, providers, snippetReflection);
-        barrierSnippets.registerLowerings(lowerings);
+    public void registerLowerings(RuntimeConfiguration runtimeConfig, OptionValues options, Providers providers,
+                    Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings, boolean hosted) {
+        if (SubstrateOptions.useRememberedSet()) {
+            // Even though I don't hold on to this instance, it is preserved because it becomes the
+            // enclosing instance for the lowerings registered within it.
+            BarrierSnippets barrierSnippets = new BarrierSnippets(options, providers);
+            barrierSnippets.registerLowerings(lowerings);
+        }
 
-        GenScavengeAllocationSnippets.registerLowering(options, factories, providers, snippetReflection, lowerings);
+        GenScavengeAllocationSnippets.registerLowering(options, providers, lowerings);
     }
 
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
-        // Needed for the barrier set
+        // Needed for the barrier set.
         access.registerAsUsed(Object[].class);
     }
 
     @Override
     public void afterAnalysis(AfterAnalysisAccess access) {
         ImageHeapLayouter heapLayouter;
+        int imageHeapNullRegionSize = Heap.getHeap().getImageHeapNullRegionSize();
         if (HeapImpl.usesImageHeapChunks()) { // needs CommittedMemoryProvider: registered late
-            heapLayouter = new ChunkedImageHeapLayouter(HeapImpl.getImageHeapInfo(), 0, true);
+            heapLayouter = new ChunkedImageHeapLayouter(HeapImpl.getImageHeapInfo(), 0, imageHeapNullRegionSize);
         } else {
-            heapLayouter = new LinearImageHeapLayouter(HeapImpl.getImageHeapInfo(), 0, true);
+            heapLayouter = new LinearImageHeapLayouter(HeapImpl.getImageHeapInfo(), 0, imageHeapNullRegionSize);
         }
         ImageSingletons.add(ImageHeapLayouter.class, heapLayouter);
     }
@@ -114,7 +119,15 @@ class HeapFeature implements GraalFeature {
     }
 
     @Override
-    public void registerForeignCalls(RuntimeConfiguration runtimeConfig, Providers providers, SnippetReflectionProvider snippetReflection, SubstrateForeignCallsProvider foreignCalls, boolean hosted) {
-        GenScavengeAllocationSnippets.registerForeignCalls(providers, foreignCalls);
+    public void registerForeignCalls(SubstrateForeignCallsProvider foreignCalls) {
+        GenScavengeAllocationSnippets.registerForeignCalls(foreignCalls);
+    }
+
+    private static RememberedSet createRememberedSet() {
+        if (SubstrateOptions.useRememberedSet()) {
+            return new CardTableBasedRememberedSet();
+        } else {
+            return new NoRememberedSet();
+        }
     }
 }

@@ -46,10 +46,13 @@ import com.oracle.svm.core.SubstrateUtil;
 import com.oracle.svm.core.annotate.AlwaysInline;
 import com.oracle.svm.core.annotate.StubCallingConvention;
 import com.oracle.svm.core.deopt.Deoptimizer;
+import com.oracle.svm.core.meta.MethodPointer;
 import com.oracle.svm.core.meta.SharedMethod;
+import com.oracle.svm.core.meta.SubstrateMethodPointerConstant;
 import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.code.CompilationInfo;
 
+import jdk.internal.vm.annotation.ForceInline;
 import jdk.vm.ci.meta.Constant;
 import jdk.vm.ci.meta.ConstantPool;
 import jdk.vm.ci.meta.ExceptionHandler;
@@ -74,7 +77,6 @@ public class HostedMethod implements SharedMethod, WrappedJavaMethod, GraphProvi
     private final ConstantPool constantPool;
     private final ExceptionHandler[] handlers;
     protected StaticAnalysisResults staticAnalysisResults;
-    private final boolean hasNeverInlineDirective;
     protected int vtableIndex = -1;
 
     /**
@@ -94,13 +96,16 @@ public class HostedMethod implements SharedMethod, WrappedJavaMethod, GraphProvi
     public final CompilationInfo compilationInfo;
     private final LocalVariableTable localVariableTable;
 
-    public HostedMethod(HostedUniverse universe, AnalysisMethod wrapped, HostedType holder, Signature signature, ConstantPool constantPool, ExceptionHandler[] handlers) {
+    private final String uniqueShortName;
+
+    public HostedMethod(HostedUniverse universe, AnalysisMethod wrapped, HostedType holder, Signature signature, ConstantPool constantPool, ExceptionHandler[] handlers, HostedMethod deoptOrigin) {
         this.wrapped = wrapped;
         this.holder = holder;
         this.signature = signature;
         this.constantPool = constantPool;
         this.handlers = handlers;
-        this.compilationInfo = new CompilationInfo(this);
+        this.compilationInfo = new CompilationInfo(this, deoptOrigin);
+        this.uniqueShortName = SubstrateUtil.uniqueShortName(this);
 
         LocalVariableTable newLocalVariableTable = null;
         if (wrapped.getLocalVariableTable() != null) {
@@ -122,7 +127,6 @@ public class HostedMethod implements SharedMethod, WrappedJavaMethod, GraphProvi
             }
         }
         localVariableTable = newLocalVariableTable;
-        hasNeverInlineDirective = SubstrateUtil.NativeImageLoadingShield.isNeverInline(wrapped);
     }
 
     @Override
@@ -163,12 +167,21 @@ public class HostedMethod implements SharedMethod, WrappedJavaMethod, GraphProvi
         return compiled;
     }
 
+    public String getUniqueShortName() {
+        return uniqueShortName;
+    }
+
     /*
      * Release compilation related information.
      */
     public void clear() {
         compilationInfo.clear();
         staticAnalysisResults = null;
+    }
+
+    @Override
+    public boolean hasCodeOffsetInImage() {
+        throw unimplemented();
     }
 
     @Override
@@ -383,12 +396,12 @@ public class HostedMethod implements SharedMethod, WrappedJavaMethod, GraphProvi
 
     @Override
     public boolean hasNeverInlineDirective() {
-        return hasNeverInlineDirective;
+        return wrapped.hasNeverInlineDirective();
     }
 
     @Override
     public boolean shouldBeInlined() {
-        return getAnnotation(AlwaysInline.class) != null;
+        return getAnnotation(AlwaysInline.class) != null || getAnnotation(ForceInline.class) != null;
     }
 
     @Override
@@ -413,16 +426,12 @@ public class HostedMethod implements SharedMethod, WrappedJavaMethod, GraphProvi
 
     @Override
     public boolean isInVirtualMethodTable(ResolvedJavaType resolved) {
-        /*
-         * This method is used by Graal to decide if method-based inlining guards are possible. As
-         * long as getEncoding() is unimplemented, this method needs to return false.
-         */
-        return false;
+        return hasVTableIndex();
     }
 
     @Override
     public Constant getEncoding() {
-        throw unimplemented();
+        return new SubstrateMethodPointerConstant(new MethodPointer(this));
     }
 
     @Override
@@ -478,7 +487,11 @@ public class HostedMethod implements SharedMethod, WrappedJavaMethod, GraphProvi
         if (result == 0) {
             result = ((HostedType) this.getSignature().getReturnType(null)).compareTo((HostedType) other.getSignature().getReturnType(null));
         }
-        assert result != 0;
+        /*
+         * Note that the result can still be 0 at this point: with class substitutions or incomplete
+         * classpath, two separate methods can have the same signature. Not ordering such methods is
+         * fine. GR-32976 should remove the sorting altogether.
+         */
         return result;
     }
 

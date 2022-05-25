@@ -46,6 +46,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.TreeSet;
 import org.graalvm.tools.insight.Insight;
+import org.graalvm.tools.insight.heap.HeapDump.ArrayBuilder;
 
 final class HeapGenerator {
     private final HeapDump.Builder generator;
@@ -166,14 +167,22 @@ final class HeapGenerator {
     }
 
     private static Object readMember(InteropLibrary iop, Object obj, String member) {
+        return readMember(iop, obj, member, (id) -> id);
+    }
+
+    private interface Convert<T> {
+        T convert(Object obj) throws UnsupportedTypeException, UnsupportedMessageException;
+    }
+
+    private static <T> T readMember(InteropLibrary iop, Object obj, String member, Convert<T> convert) {
         String errMsg;
         try {
             Object value = iop.readMember(obj, member);
             if (!iop.isNull(value)) {
-                return value;
+                return convert.convert(value);
             }
             errMsg = "'" + member + "' should be defined";
-        } catch (UnsupportedMessageException | UnknownIdentifierException ex) {
+        } catch (UnsupportedTypeException | UnsupportedMessageException | UnknownIdentifierException ex) {
             errMsg = "Cannot find '" + member + "'";
         }
         StringBuilder sb = new StringBuilder(errMsg);
@@ -265,17 +274,48 @@ final class HeapGenerator {
         if (clazz == null) {
             return unreachable;
         }
-        InstanceBuilder builder = seg.newInstance(clazz);
-        objects.put(obj, builder.id());
-        pending.add(() -> {
-            for (String n : clazz.names()) {
-                final Object v = iop.readMember(obj, n);
-                ObjectInstance vId = dumpObject(iop, seg, null, v, depth - 1);
-                builder.put(n, vId);
+
+        int len = findArrayLength(iop, obj);
+        if (len >= 0) {
+            ArrayBuilder builder = seg.newArray(len);
+            objects.put(obj, builder.id());
+            pending.add(() -> {
+                for (int i = 0; i < len; i++) {
+                    Object v = iop.readArrayElement(obj, i);
+                    ObjectInstance vId = dumpObject(iop, seg, null, v, depth - 1);
+                    builder.put(i, vId);
+                }
+                builder.dumpInstance();
+            });
+            return builder.id();
+        } else {
+            InstanceBuilder builder = seg.newInstance(clazz);
+            objects.put(obj, builder.id());
+            pending.add(() -> {
+                for (String n : clazz.names()) {
+                    final Object v = iop.readMember(obj, n);
+                    ObjectInstance vId = dumpObject(iop, seg, null, v, depth - 1);
+                    builder.put(n, vId);
+                }
+                builder.dumpInstance();
+            });
+            return builder.id();
+        }
+    }
+
+    private static int findArrayLength(InteropLibrary iop, Object obj) {
+        if (!iop.hasArrayElements(obj)) {
+            return -1;
+        }
+        try {
+            long len = iop.getArraySize(obj);
+            if (len > Integer.MAX_VALUE) {
+                return Integer.MAX_VALUE;
             }
-            builder.dumpInstance();
-        });
-        return builder.id();
+            return (int) len;
+        } catch (UnsupportedMessageException ex) {
+            return -1;
+        }
     }
 
     ClassInstance findClass(InteropLibrary iop, HeapDump seg, String metaHint, Object obj) throws IOException {
@@ -321,7 +361,7 @@ final class HeapGenerator {
 
     /**
      * Dumps source section so it looks like {@link SourceSection} in a regular Java Heap Dump.
-     * 
+     *
      * @param seg segment to write heap data to
      * @param sourceId object id of the source the section belongs to
      * @param charIndex 0-based index of initial character of the section in the source
@@ -346,7 +386,7 @@ final class HeapGenerator {
 
     /**
      * Dumps source so it looks like {@link Source} in a regular Java Heap Dump.
-     * 
+     *
      * @param iop interop library to use
      * @param seg segment to write heap data to
      * @param source object representing the {@code SourceInfo} object defined by {@link Insight}
@@ -357,7 +397,7 @@ final class HeapGenerator {
      *             represented
      */
     private ObjectInstance dumpSource(InteropLibrary iop, HeapDump seg, Object source) throws IOException, UnsupportedMessageException {
-        String srcName = asStringOrNull(iop, source, "name");
+        String srcName = readMember(iop, source, "name", iop::asString);
         String mimeType = asStringOrNull(iop, source, "mimeType");
         String uri = asStringOrNull(iop, source, "uri");
         String characters = asStringOrNull(iop, source, "characters");
@@ -382,7 +422,7 @@ final class HeapGenerator {
     }
 
     private interface Dump {
-        void dump() throws UnknownIdentifierException, IOException, UnsupportedMessageException;
+        void dump() throws UnknownIdentifierException, IOException, UnsupportedMessageException, InvalidArrayIndexException;
     }
 
     private static final class SourceKey {

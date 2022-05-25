@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -54,12 +54,11 @@ import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.graph.NodeSourcePosition;
 import org.graalvm.compiler.graph.iterators.NodeIterable;
-import org.graalvm.compiler.graph.spi.Simplifiable;
-import org.graalvm.compiler.graph.spi.SimplifierTool;
 import org.graalvm.compiler.nodeinfo.InputType;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.ProfileData.BranchProbabilityData;
 import org.graalvm.compiler.nodes.ProfileData.ProfileSource;
+import org.graalvm.compiler.nodes.StructuredGraph.StageFlag;
 import org.graalvm.compiler.nodes.calc.AddNode;
 import org.graalvm.compiler.nodes.calc.CompareNode;
 import org.graalvm.compiler.nodes.calc.ConditionalNode;
@@ -78,6 +77,8 @@ import org.graalvm.compiler.nodes.java.InstanceOfNode;
 import org.graalvm.compiler.nodes.java.LoadFieldNode;
 import org.graalvm.compiler.nodes.spi.LIRLowerable;
 import org.graalvm.compiler.nodes.spi.NodeLIRBuilderTool;
+import org.graalvm.compiler.nodes.spi.Simplifiable;
+import org.graalvm.compiler.nodes.spi.SimplifierTool;
 import org.graalvm.compiler.nodes.spi.SwitchFoldable;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 
@@ -317,40 +318,44 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
             return;
         }
 
-        if (falseSuccessor().hasNoUsages() && (!(falseSuccessor() instanceof LoopExitNode)) && falseSuccessor().next() instanceof IfNode &&
-                        !(((IfNode) falseSuccessor().next()).falseSuccessor() instanceof LoopExitNode)) {
-            AbstractBeginNode intermediateBegin = falseSuccessor();
-            IfNode nextIf = (IfNode) intermediateBegin.next();
-            double probabilityB = (1.0 - this.getTrueSuccessorProbability()) * nextIf.getTrueSuccessorProbability();
-            if (this.getTrueSuccessorProbability() < probabilityB) {
-                // Reordering of those two if statements is beneficial from the point of view of
-                // their probabilities.
-                if (prepareForSwap(tool, condition(), nextIf.condition())) {
-                    // Reordering is allowed from (if1 => begin => if2) to (if2 => begin => if1).
-                    assert intermediateBegin.next() == nextIf;
-                    AbstractBeginNode bothFalseBegin = nextIf.falseSuccessor();
-                    nextIf.setFalseSuccessor(null);
-                    intermediateBegin.setNext(null);
-                    this.setFalseSuccessor(null);
+        if (tool.finalCanonicalization()) {
+            if (falseSuccessor().hasNoUsages() && (!(falseSuccessor() instanceof LoopExitNode)) && falseSuccessor().next() instanceof IfNode &&
+                            !(((IfNode) falseSuccessor().next()).falseSuccessor() instanceof LoopExitNode)) {
+                AbstractBeginNode intermediateBegin = falseSuccessor();
+                IfNode nextIf = (IfNode) intermediateBegin.next();
+                double probabilityB = (1.0 - this.getTrueSuccessorProbability()) * nextIf.getTrueSuccessorProbability();
+                if (this.getTrueSuccessorProbability() < probabilityB) {
+                    // Reordering of those two if statements is beneficial from the point of view of
+                    // their probabilities.
+                    if (prepareForSwap(tool, condition(), nextIf.condition())) {
+                        // @formatter:off
+                        // Reordering is allowed from (if1 => begin => if2) to (if2 => begin => if1).
+                        // @formatter:on
+                        assert intermediateBegin.next() == nextIf;
+                        AbstractBeginNode bothFalseBegin = nextIf.falseSuccessor();
+                        nextIf.setFalseSuccessor(null);
+                        intermediateBegin.setNext(null);
+                        this.setFalseSuccessor(null);
 
-                    this.replaceAtPredecessor(nextIf);
-                    nextIf.setFalseSuccessor(intermediateBegin);
-                    intermediateBegin.setNext(this);
-                    this.setFalseSuccessor(bothFalseBegin);
+                        this.replaceAtPredecessor(nextIf);
+                        nextIf.setFalseSuccessor(intermediateBegin);
+                        intermediateBegin.setNext(this);
+                        this.setFalseSuccessor(bothFalseBegin);
 
-                    NodeSourcePosition intermediateBeginPosition = intermediateBegin.getNodeSourcePosition();
-                    intermediateBegin.setNodeSourcePosition(bothFalseBegin.getNodeSourcePosition());
-                    bothFalseBegin.setNodeSourcePosition(intermediateBeginPosition);
+                        NodeSourcePosition intermediateBeginPosition = intermediateBegin.getNodeSourcePosition();
+                        intermediateBegin.setNodeSourcePosition(bothFalseBegin.getNodeSourcePosition());
+                        bothFalseBegin.setNodeSourcePosition(intermediateBeginPosition);
 
-                    ProfileSource combinedSource = profileData.getProfileSource().combine(nextIf.profileData.getProfileSource());
-                    nextIf.setTrueSuccessorProbability(BranchProbabilityData.create(probabilityB, combinedSource));
-                    if (probabilityB == 1.0) {
-                        this.setTrueSuccessorProbability(BranchProbabilityData.create(0.0, combinedSource));
-                    } else {
-                        double newProbability = this.getTrueSuccessorProbability() / (1.0 - probabilityB);
-                        this.setTrueSuccessorProbability(BranchProbabilityData.create(Math.min(1.0, newProbability), combinedSource));
+                        ProfileSource combinedSource = profileData.getProfileSource().combine(nextIf.profileData.getProfileSource());
+                        nextIf.setTrueSuccessorProbability(BranchProbabilityData.create(probabilityB, combinedSource));
+                        if (probabilityB == 1.0) {
+                            this.setTrueSuccessorProbability(BranchProbabilityData.create(0.0, combinedSource));
+                        } else {
+                            double newProbability = this.getTrueSuccessorProbability() / (1.0 - probabilityB);
+                            this.setTrueSuccessorProbability(BranchProbabilityData.create(Math.min(1.0, newProbability), combinedSource));
+                        }
+                        return;
                     }
-                    return;
                 }
             }
         }
@@ -896,6 +901,23 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
      */
     private boolean removeOrMaterializeIf(SimplifierTool tool) {
         assert trueSuccessor().hasNoUsages() && falseSuccessor().hasNoUsages();
+        MergeNode blockingMerge = null;
+        if (trueSuccessor().next() instanceof ReturnNode && falseSuccessor().next() instanceof AbstractEndNode) {
+            AbstractMergeNode am = ((AbstractEndNode) falseSuccessor.next()).merge();
+            if (am instanceof MergeNode) {
+                blockingMerge = (MergeNode) am;
+            }
+        } else if (falseSuccessor().next() instanceof ReturnNode && trueSuccessor().next() instanceof AbstractEndNode) {
+            AbstractMergeNode am = ((AbstractEndNode) trueSuccessor().next()).merge();
+            if (am instanceof MergeNode) {
+                blockingMerge = (MergeNode) am;
+            }
+        }
+        if (blockingMerge != null) {
+            if (blockingMerge.next() instanceof ReturnNode) {
+                AbstractMergeNode.duplicateReturnThroughMerge(blockingMerge);
+            }
+        }
         if (trueSuccessor().next() instanceof AbstractEndNode && falseSuccessor().next() instanceof AbstractEndNode) {
             AbstractEndNode trueEnd = (AbstractEndNode) trueSuccessor().next();
             AbstractEndNode falseEnd = (AbstractEndNode) falseSuccessor().next();
@@ -936,6 +958,21 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
                         removeThroughFalseBranch(tool, merge);
                         return true;
                     }
+                    /*-
+                     * Remove this pattern:
+                     * if (a == null)
+                     *     return null
+                     * else
+                     *     return a
+                     */
+                    if (condition instanceof IsNullNode && trueValue.isJavaConstant() && trueValue.asJavaConstant().isDefaultForKind() && merge instanceof MergeNode) {
+                        ValueNode value = ((IsNullNode) condition).getValue();
+                        if (falseValue == value && singlePhi.stamp(NodeView.DEFAULT).equals(value.stamp(NodeView.DEFAULT))) {
+                            singlePhi.setValueAt(trueEnd, falseValue);
+                            removeThroughFalseBranch(tool, merge);
+                            return true;
+                        }
+                    }
                 }
             }
         }
@@ -965,7 +1002,7 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
                 LoopExitNode loopExitNode = graph().add(new LoopExitNode(loopBegin));
                 loopExitNode.setStateAfter(stateAfter);
                 graph().addBeforeFixed(this, loopExitNode);
-                if (graph().hasValueProxies() && needsProxy) {
+                if (graph().isBeforeStage(StageFlag.VALUE_PROXY_REMOVAL) && needsProxy) {
                     value = graph().addOrUnique(new ValueProxyNode(value, loopExitNode));
                 }
             }
@@ -998,7 +1035,7 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
         //           | Merge +---------+Phi|
         //           +-------+         +---+
         // @formatter:on
-        if (this.graph().hasValueProxies()) {
+        if (this.graph().isBeforeStage(StageFlag.VALUE_PROXY_REMOVAL)) {
             if (trueSuccessor instanceof LoopExitNode && falseSuccessor instanceof LoopExitNode) {
                 assert ((LoopExitNode) trueSuccessor).loopBegin() == ((LoopExitNode) falseSuccessor).loopBegin();
                 /*
@@ -1100,7 +1137,7 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
             return true;
         }
 
-        if (graph().isAfterFixedReadPhase()) {
+        if (graph().isAfterStage(StageFlag.FIXED_READS)) {
             if (value instanceof ParameterNode) {
                 // Assume Parameters are always evaluated but only apply this logic to graphs after
                 // inlining. Checking for ParameterNode causes it to apply to graphs which are going
@@ -1131,7 +1168,7 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
         if (value != null) {
             return value;
         }
-        if (!graph().isAfterExpandLogic()) {
+        if (graph().isBeforeStage(StageFlag.EXPAND_LOGIC)) {
             /*
              * !isAfterExpandLogic() => Cannot spawn NormalizeCompareNodes after lowering in the
              * ExpandLogicPhase.
@@ -1427,9 +1464,6 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
         assert !ends.hasNext();
         assert falseEnds.size() + trueEnds.size() == xs.length;
 
-        connectEnds(falseEnds, phi, phiValues, oldFalseSuccessor, merge, tool);
-        connectEnds(trueEnds, phi, phiValues, oldTrueSuccessor, merge, tool);
-
         if (this.getTrueSuccessorProbability() == 0.0) {
             for (AbstractEndNode endNode : trueEnds) {
                 propagateZeroProbability(endNode);
@@ -1441,6 +1475,14 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
                 propagateZeroProbability(endNode);
             }
         }
+
+        if (this.getProfileData().getProfileSource() == ProfileSource.INJECTED) {
+            // Attempt to propagate the injected profile to predecessor if without a profile.
+            propagateInjectedProfile(this.getProfileData(), trueEnds, falseEnds);
+        }
+
+        connectEnds(falseEnds, phi, phiValues, oldFalseSuccessor, merge, tool);
+        connectEnds(trueEnds, phi, phiValues, oldTrueSuccessor, merge, tool);
 
         /*
          * Remove obsolete ends only after processing all ends, otherwise oldTrueSuccessor or
@@ -1495,6 +1537,149 @@ public final class IfNode extends ControlSplitNode implements Simplifiable, LIRL
                 return;
             }
             prev = node;
+        }
+    }
+
+    /**
+     * Try to propagate the injected branch probability of the to-be-removed if to a preceding if
+     * node with an unknown branch probability that is connected to the merge preceding the if
+     * without any other control flow merges in between. The if node must not be ambiguous.
+     *
+     * Prerequisite: at least one true end and at least one false end, and either exactly one true
+     * end or exactly one false end or both.
+     *
+     * Simple case: Exactly one true and and one false end in the merge and both ends need to lead
+     * to a common predecessor if without merges in between.
+     *
+     * More general case: there can be merges/ifs in one of the two branches, in which case we would
+     * disregard that branch and only look for the predecessor if in the other, merge-less branch:
+     *
+     * <pre>
+     *       if[unknown]---->cond
+     *      /    \
+     *  begin    begin
+     *    |        |
+     *    |  [     if      ]
+     *    |  [    /  \     ]
+     *    |  [ begin begin ]
+     *    |  [   |     |   ]
+     *    |  [  end   end  ]
+     *    |  [   \  /      ]
+     *    |  [    merge    ]
+     *    |        |
+     * trueEnd falseEnd    C1 C0
+     *      \  /            \ /
+     *      merge---------->phi
+     *        |              \
+     *      if[injected]----> == C1
+     *      /    \
+     * trueSucc falseSucc
+     * </pre>
+     *
+     * There can also be either multiple true ends or multiple false ends (but not both). Consider
+     * the following example:
+     *
+     * <pre>
+     *      if[unknown]------->cond
+     *      /      \
+     * falseBegin trueBegin
+     *      |        \
+     *      if        +
+     *     /  \       |
+     *  begin begin   |
+     *    |...  |...  |
+     *    |     |     |
+     *   end   end    |
+     *     \  /       |
+     *     merge      |
+     *       |        |
+     *      if        |
+     *     /  \       |
+     *  begin begin   |
+     *    |... |...   +
+     *    |    |     /
+     *  TEnd TEnd  FEnd     C1 C1 C0
+     *     \  |   /          \ | /
+     *      merge ----------->phi
+     *       |                 \
+     *      if[injected]------> == C1
+     *      /    \
+     * trueSucc falseSucc
+     * </pre>
+     *
+     * Here the false successor of the bottom if is rewired through the single false end to the true
+     * begin of the top if, while the true successor sticks with the leftover true ends of the
+     * merge. We propagate the injected profile from the bottom if to the top if, but because the
+     * false successor of the former is wired to the true successor of the latter, we need to invert
+     * the branch probability.
+     *
+     * @param profile the injected {@link BranchProbabilityData profile} to propagate.
+     * @param trueEnds merge ends where the if condition is true
+     * @param falseEnds merge ends where the if condition is false
+     */
+    private static void propagateInjectedProfile(BranchProbabilityData profile, List<EndNode> trueEnds, List<EndNode> falseEnds) {
+        if (trueEnds.size() >= 1 && falseEnds.size() >= 1 && (trueEnds.size() == 1 || falseEnds.size() == 1)) {
+            EndNode singleTrueEnd = trueEnds.size() == 1 ? trueEnds.get(0) : null;
+            EndNode singleFalseEnd = falseEnds.size() == 1 ? falseEnds.get(0) : null;
+            propagateInjectedProfile(profile, singleTrueEnd, singleFalseEnd);
+        }
+    }
+
+    /**
+     * Try to propagate injected branch probability to a predecessor if.
+     *
+     * @param profile the injected {@link BranchProbabilityData profile} to propagate.
+     * @param singleTrueEnd single true condition merge end or null
+     * @param singleFalseEnd single false condition merge end or null
+     */
+    private static void propagateInjectedProfile(BranchProbabilityData profile, EndNode singleTrueEnd, EndNode singleFalseEnd) {
+        IfNode foundIf = null;
+        FixedNode prev = null;
+        boolean viaFalseEnd = false;
+        if (singleTrueEnd != null) {
+            for (FixedNode node : GraphUtil.predecessorIterable(singleTrueEnd)) {
+                if (node instanceof IfNode) {
+                    foundIf = (IfNode) node;
+                    break;
+                } else if (node instanceof AbstractMergeNode) {
+                    break;
+                }
+                prev = node;
+            }
+        }
+        if (singleFalseEnd != null) {
+            FixedNode falsePrev = null;
+            for (FixedNode node : GraphUtil.predecessorIterable(singleFalseEnd)) {
+                if (node instanceof IfNode) {
+                    if (foundIf == node) {
+                        // found same if node through true and false end
+                        break;
+                    } else if (foundIf == null) {
+                        // found if node only through false end
+                        foundIf = (IfNode) node;
+                        prev = falsePrev;
+                        viaFalseEnd = true;
+                    } else {
+                        // found different if nodes, abort
+                        return;
+                    }
+                } else if (node instanceof AbstractMergeNode) {
+                    break;
+                }
+                falsePrev = node;
+            }
+        }
+
+        if (foundIf != null && !ProfileSource.isTrusted(foundIf.getProfileData().getProfileSource())) {
+            boolean negated;
+            if (foundIf.trueSuccessor() == prev) {
+                negated = viaFalseEnd;
+            } else if (foundIf.falseSuccessor() == prev) {
+                negated = !viaFalseEnd;
+            } else {
+                throw new GraalError("Illegal state");
+            }
+            foundIf.setTrueSuccessorProbability(negated ? profile.negated() : profile);
         }
     }
 

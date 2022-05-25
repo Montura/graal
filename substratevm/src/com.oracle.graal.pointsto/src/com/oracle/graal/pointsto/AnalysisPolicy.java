@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2017, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@ import com.oracle.graal.pointsto.api.PointstoOptions;
 import com.oracle.graal.pointsto.flow.AbstractSpecialInvokeTypeFlow;
 import com.oracle.graal.pointsto.flow.AbstractVirtualInvokeTypeFlow;
 import com.oracle.graal.pointsto.flow.ActualReturnTypeFlow;
+import com.oracle.graal.pointsto.flow.CloneTypeFlow;
 import com.oracle.graal.pointsto.flow.TypeFlow;
 import com.oracle.graal.pointsto.flow.context.AnalysisContext;
 import com.oracle.graal.pointsto.flow.context.AnalysisContextPolicy;
@@ -39,6 +40,7 @@ import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
+import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.graal.pointsto.typestate.TypeState;
 import com.oracle.graal.pointsto.typestore.ArrayElementsTypeStore;
 import com.oracle.graal.pointsto.typestore.FieldTypeStore;
@@ -102,31 +104,43 @@ public abstract class AnalysisPolicy {
     public abstract boolean isMergingEnabled();
 
     /** Note type state merge. */
-    public abstract void noteMerge(BigBang bb, TypeState t);
+    public abstract void noteMerge(PointsToAnalysis bb, TypeState t);
 
     /** Note analysis object state merge. */
-    public abstract void noteMerge(BigBang bb, AnalysisObject... a);
+    public abstract void noteMerge(PointsToAnalysis bb, AnalysisObject... a);
 
     /** Note analysis object state merge. */
-    public abstract void noteMerge(BigBang bb, AnalysisObject o);
+    public abstract void noteMerge(PointsToAnalysis bb, AnalysisObject o);
 
     /** Specifies if an allocation site should be modeled context sensitively. */
-    public abstract boolean isContextSensitiveAllocation(BigBang bb, AnalysisType type, AnalysisContext allocationContext);
+    public abstract boolean isContextSensitiveAllocation(PointsToAnalysis bb, AnalysisType type, AnalysisContext allocationContext);
 
     /** Create a heap allocated object abstraction. */
-    public abstract AnalysisObject createHeapObject(BigBang bb, AnalysisType objectType, BytecodeLocation allocationSite, AnalysisContext allocationContext);
+    public abstract AnalysisObject createHeapObject(PointsToAnalysis bb, AnalysisType objectType, BytecodeLocation allocationSite, AnalysisContext allocationContext);
 
     /** Create a constant object abstraction. */
-    public abstract AnalysisObject createConstantObject(BigBang bb, JavaConstant constant, AnalysisType exactType);
+    public abstract AnalysisObject createConstantObject(PointsToAnalysis bb, JavaConstant constant, AnalysisType exactType);
+
+    /** Create type state for dynamic new instance. */
+    public abstract TypeState dynamicNewInstanceState(PointsToAnalysis bb, TypeState currentState, TypeState newState, BytecodeLocation allocationSite, AnalysisContext allocationContext);
+
+    /** Create type state for clone. */
+    public abstract TypeState cloneState(PointsToAnalysis bb, TypeState currentState, TypeState inputState, BytecodeLocation cloneSite, AnalysisContext allocationContext);
+
+    /**
+     * Link the elements of the cloned objects (array flows or field flows) to the elements of the
+     * source objects.
+     */
+    public abstract void linkClonedObjects(PointsToAnalysis bb, TypeFlow<?> inputFlow, CloneTypeFlow cloneFlow, BytecodePosition source);
 
     /** Create an allocation site given the BCI and method. */
-    public abstract BytecodeLocation createAllocationSite(BigBang bb, int bci, AnalysisMethod method);
+    public abstract BytecodeLocation createAllocationSite(PointsToAnalysis bb, int bci, AnalysisMethod method);
 
     /**
      * Create the allocation site given a unique key and method. The BCI might be duplicated due to
      * Graal method substitutions and inlining. Then we use a unique object key.
      */
-    public BytecodeLocation createAllocationSite(BigBang bb, Object key, AnalysisMethod method) {
+    public BytecodeLocation createAllocationSite(PointsToAnalysis bb, Object key, AnalysisMethod method) {
         return createAllocationSite(bb, BytecodeLocation.keyToBci(key), method);
     }
 
@@ -135,21 +149,21 @@ public abstract class AnalysisPolicy {
     public abstract ArrayElementsTypeStore createArrayElementsTypeStore(AnalysisObject object, AnalysisUniverse universe);
 
     /** Provides implementation for the virtual invoke type flow. */
-    public abstract AbstractVirtualInvokeTypeFlow createVirtualInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, AnalysisMethod targetMethod,
+    public abstract AbstractVirtualInvokeTypeFlow createVirtualInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, PointsToAnalysisMethod targetMethod,
                     TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, BytecodeLocation location);
 
     /** Provides implementation for the virtual invoke type flow. */
-    public abstract AbstractSpecialInvokeTypeFlow createSpecialInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, AnalysisMethod targetMethod,
+    public abstract AbstractSpecialInvokeTypeFlow createSpecialInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, PointsToAnalysisMethod targetMethod,
                     TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, BytecodeLocation location);
 
     @SuppressWarnings("unused")
-    public int makePoperties(BigBang bb, AnalysisObject... objects) {
+    public int makeProperties(BigBang bb, AnalysisObject... objects) {
         /* The default analysis policy doesn't use properties. */
         return 0;
     }
 
     @SuppressWarnings("unused")
-    public int makePopertiesForUnion(TypeState s1, TypeState s2) {
+    public int makePropertiesForUnion(TypeState s1, TypeState s2) {
         /* The default analysis policy doesn't use properties. */
         return 0;
     }

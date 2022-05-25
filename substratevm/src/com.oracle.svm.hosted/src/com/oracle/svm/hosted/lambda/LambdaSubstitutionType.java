@@ -27,8 +27,8 @@ package com.oracle.svm.hosted.lambda;
 import java.lang.annotation.Annotation;
 
 import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
+import com.oracle.graal.pointsto.util.GraalAccess;
 import com.oracle.svm.core.jdk.LambdaFormHiddenMethod;
-import com.oracle.svm.hosted.c.GraalAccess;
 
 import jdk.vm.ci.meta.Assumptions.AssumptionResult;
 import jdk.vm.ci.meta.JavaConstant;
@@ -146,6 +146,7 @@ public class LambdaSubstitutionType implements ResolvedJavaType, OriginalClassPr
         return original.isAssignableFrom(other);
     }
 
+    @SuppressWarnings("deprecation")
     @Override
     public ResolvedJavaType getHostClass() {
         return original.getHostClass();
@@ -398,7 +399,10 @@ public class LambdaSubstitutionType implements ResolvedJavaType, OriginalClassPr
 
     @Override
     public <T extends Annotation> T getDeclaredAnnotation(Class<T> annotationClass) {
-        return original.getDeclaredAnnotation(annotationClass);
+        if (annotationClass == LambdaFormHiddenMethod.class) {
+            return annotationClass.cast(LambdaFormHiddenMethod.Holder.INSTANCE);
+        }
+        return null;
     }
 
     @Override
@@ -408,7 +412,7 @@ public class LambdaSubstitutionType implements ResolvedJavaType, OriginalClassPr
 
     @Override
     public Annotation[] getDeclaredAnnotations() {
-        return original.getDeclaredAnnotations();
+        return LambdaFormHiddenMethod.Holder.ARRAY;
     }
 
     public ResolvedJavaType getOriginal() {

@@ -24,14 +24,15 @@
  */
 package com.oracle.svm.util;
 
-// Checkstyle: allow reflection
-
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 /**
- * This class contains utility methods for commonly used reflection functionality.
+ * This class contains utility methods for commonly used reflection functionality. Note that lookups
+ * will not work on JDK 17 in cases when the field/method is filtered. See
+ * jdk.internal.reflect.Reflection#fieldFilterMap for more information or
+ * com.oracle.svm.hosted.ModuleLayerFeature for an example of a workaround in such cases.
  */
 public final class ReflectionUtil {
 
@@ -54,23 +55,37 @@ public final class ReflectionUtil {
     }
 
     public static Method lookupMethod(Class<?> declaringClass, String methodName, Class<?>... parameterTypes) {
+        return lookupMethod(false, declaringClass, methodName, parameterTypes);
+    }
+
+    public static Method lookupMethod(boolean optional, Class<?> declaringClass, String methodName, Class<?>... parameterTypes) {
         try {
             Method result = declaringClass.getDeclaredMethod(methodName, parameterTypes);
             openModule(declaringClass);
             result.setAccessible(true);
             return result;
         } catch (ReflectiveOperationException ex) {
+            if (optional) {
+                return null;
+            }
             throw new ReflectionUtilError(ex);
         }
     }
 
     public static <T> Constructor<T> lookupConstructor(Class<T> declaringClass, Class<?>... parameterTypes) {
+        return lookupConstructor(false, declaringClass, parameterTypes);
+    }
+
+    public static <T> Constructor<T> lookupConstructor(boolean optional, Class<T> declaringClass, Class<?>... parameterTypes) {
         try {
             Constructor<T> result = declaringClass.getDeclaredConstructor(parameterTypes);
             openModule(declaringClass);
             result.setAccessible(true);
             return result;
         } catch (ReflectiveOperationException ex) {
+            if (optional) {
+                return null;
+            }
             throw new ReflectionUtilError(ex);
         }
     }
@@ -84,12 +99,19 @@ public final class ReflectionUtil {
     }
 
     public static Field lookupField(Class<?> declaringClass, String fieldName) {
+        return lookupField(false, declaringClass, fieldName);
+    }
+
+    public static Field lookupField(boolean optional, Class<?> declaringClass, String fieldName) {
         try {
             Field result = declaringClass.getDeclaredField(fieldName);
             openModule(declaringClass);
             result.setAccessible(true);
             return result;
         } catch (ReflectiveOperationException ex) {
+            if (optional) {
+                return null;
+            }
             throw new ReflectionUtilError(ex);
         }
     }

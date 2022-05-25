@@ -104,8 +104,13 @@ public class HostedField implements OriginalFieldProvider, SharedField, Comparab
         return wrapped.isAccessed();
     }
 
-    public boolean isInImageHeap() {
-        return wrapped.isInImageHeap();
+    @Override
+    public boolean isReachable() {
+        return wrapped.isReachable();
+    }
+
+    public boolean isRead() {
+        return wrapped.isRead();
     }
 
     @Override
@@ -146,11 +151,12 @@ public class HostedField implements OriginalFieldProvider, SharedField, Comparab
         } else {
             wrappedReceiver = receiver;
         }
-        return universe.lookup(universe.getConstantReflectionProvider().readFieldValue(wrapped, wrappedReceiver));
+        return universe.lookup(universe.getConstantReflectionProvider().readValue(metaAccess, wrapped, wrappedReceiver));
     }
 
     public JavaConstant readStorageValue(JavaConstant receiver) {
         JavaConstant result = readValue(receiver);
+        assert result != null : "Cannot read value for field " + this.format("%H.%n");
         assert result.getJavaKind() == getType().getStorageKind() : this;
         return result;
     }

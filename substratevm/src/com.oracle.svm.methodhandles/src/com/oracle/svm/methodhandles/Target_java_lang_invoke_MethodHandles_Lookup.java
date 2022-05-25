@@ -35,14 +35,10 @@ import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
 import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.hub.DynamicHub;
-import com.oracle.svm.core.invoke.MethodHandleUtils.MethodHandlesSupported;
 import com.oracle.svm.core.invoke.Target_java_lang_invoke_MemberName;
-import com.oracle.svm.core.jdk.JDK11_0_10OrEarlier;
-import com.oracle.svm.core.jdk.JDK11_0_11OrLater;
-import com.oracle.svm.core.jdk.JDK15OrLater;
-import com.oracle.svm.core.jdk.Target_java_lang_Module;
+import com.oracle.svm.core.jdk.JDK17OrLater;
 
-@TargetClass(value = MethodHandles.class, innerClass = "Lookup", onlyWith = MethodHandlesSupported.class)
+@TargetClass(value = MethodHandles.class, innerClass = "Lookup")
 final class Target_java_lang_invoke_MethodHandles_Lookup {
     @SuppressWarnings("static-method")
     @Substitute
@@ -52,17 +48,6 @@ final class Target_java_lang_invoke_MethodHandles_Lookup {
 
     @SuppressWarnings({"static-method", "unused"})
     @Substitute
-    @TargetElement(onlyWith = JDK11_0_10OrEarlier.class)
-    private MethodHandle maybeBindCaller(Target_java_lang_invoke_MemberName method, MethodHandle mh,
-                    Class<?> boundCallerClass)
-                    throws IllegalAccessException {
-        /* Binding the caller triggers the generation of an invoker */
-        return mh;
-    }
-
-    @SuppressWarnings({"static-method", "unused"})
-    @Substitute
-    @TargetElement(onlyWith = JDK11_0_11OrLater.class)
     private MethodHandle maybeBindCaller(Target_java_lang_invoke_MemberName method, MethodHandle mh,
                     Target_java_lang_invoke_MethodHandles_Lookup boundCaller)
                     throws IllegalAccessException {
@@ -71,25 +56,25 @@ final class Target_java_lang_invoke_MethodHandles_Lookup {
     }
 
     @Alias //
-    @TargetElement(onlyWith = JDK15OrLater.class) //
+    @TargetElement(onlyWith = JDK17OrLater.class) //
     private Class<?> lookupClass;
 
     @Alias //
-    @TargetElement(onlyWith = JDK15OrLater.class) //
+    @TargetElement(onlyWith = JDK17OrLater.class) //
     private Class<?> prevLookupClass;
 
     @Alias //
-    @TargetElement(onlyWith = JDK15OrLater.class) //
+    @TargetElement(onlyWith = JDK17OrLater.class) //
     private int allowedModes;
 
     @Substitute
-    @TargetElement(onlyWith = JDK15OrLater.class)
+    @TargetElement(onlyWith = JDK17OrLater.class)
     private IllegalAccessException makeAccessException(Class<?> targetClass) {
         String message = "access violation: " + targetClass;
         if (this == SubstrateUtil.cast(MethodHandles.publicLookup(), Target_java_lang_invoke_MethodHandles_Lookup.class)) {
             message += ", from public Lookup";
         } else {
-            Target_java_lang_Module m = SubstrateUtil.cast(lookupClass, DynamicHub.class).getModule();
+            Object m = SubstrateUtil.cast(lookupClass, DynamicHub.class).getModule();
             message += ", from " + lookupClass + " (" + m + ")";
             if (prevLookupClass != null) {
                 message += ", previous lookup " +
@@ -102,7 +87,7 @@ final class Target_java_lang_invoke_MethodHandles_Lookup {
     /** This call is a noop without the security manager. */
     @SuppressWarnings("unused")
     @Substitute
-    @TargetElement(onlyWith = JDK15OrLater.class)
+    @TargetElement(onlyWith = JDK17OrLater.class)
     void checkSecurityManager(Class<?> refc) {
     }
 }

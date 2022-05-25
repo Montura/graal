@@ -25,28 +25,28 @@ package com.oracle.truffle.espresso.nodes;
 
 import java.util.Arrays;
 
-import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.frame.Frame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.Node;
-import com.oracle.truffle.espresso.EspressoLanguage;
 import com.oracle.truffle.espresso.impl.Method;
-import com.oracle.truffle.espresso.substitutions.Substitutor;
+import com.oracle.truffle.espresso.meta.EspressoError;
 import com.oracle.truffle.espresso.perf.DebugCounter;
+import com.oracle.truffle.espresso.substitutions.JavaSubstitution;
 
 public final class IntrinsicSubstitutorNode extends EspressoMethodNode {
-    @Child private Substitutor substitution;
-
-    @CompilerDirectives.CompilationFinal //
-    int callState = 0;
+    @Child private JavaSubstitution substitution;
 
     // Truffle does not want to report split on first call. Delay until the second.
     private final DebugCounter nbSplits;
 
-    public IntrinsicSubstitutorNode(Substitutor.Factory factory, Method method) {
+    public IntrinsicSubstitutorNode(JavaSubstitution.Factory factory, Method method) {
         super(method.getMethodVersion());
-        this.substitution = factory.create(EspressoLanguage.getCurrentContext().getMeta());
-        if (substitution.shouldSplit()) {
+        this.substitution = factory.create();
+
+        EspressoError.guarantee(!substitution.isTrivial() || !method.isSynchronized(),
+                        "Substitution for synchronized method '%s' cannot be marked as trivial", method);
+
+        if (substitution.canSplit()) {
             this.nbSplits = DebugCounter.create("Splits for: " + Arrays.toString(factory.getMethodNames()));
         } else {
             this.nbSplits = null;
@@ -55,10 +55,9 @@ public final class IntrinsicSubstitutorNode extends EspressoMethodNode {
 
     private IntrinsicSubstitutorNode(IntrinsicSubstitutorNode toSplit) {
         super(toSplit.getMethodVersion());
-        assert toSplit.substitution.shouldSplit();
+        assert toSplit.substitution.canSplit();
         this.substitution = toSplit.substitution.split();
         this.nbSplits = toSplit.nbSplits;
-        this.callState = 3;
     }
 
     @Override
@@ -68,20 +67,12 @@ public final class IntrinsicSubstitutorNode extends EspressoMethodNode {
 
     @Override
     public Object executeBody(VirtualFrame frame) {
-        if (CompilerDirectives.inInterpreter() && callState <= 1) {
-            callState++;
-        }
-        if (CompilerDirectives.inInterpreter() && callState == 2 && !substitution.uninitialized()) {
-            // Hints to the truffle runtime that it should split this node on every new call site
-            reportPolymorphicSpecialize();
-            callState = 3;
-        }
         return substitution.invoke(frame.getArguments());
     }
 
     @Override
-    public boolean shouldSplit() {
-        return substitution.shouldSplit();
+    public boolean canSplit() {
+        return substitution.canSplit();
     }
 
     @Override
@@ -96,7 +87,12 @@ public final class IntrinsicSubstitutorNode extends EspressoMethodNode {
     }
 
     @Override
-    public int getCurrentBCI(@SuppressWarnings("unused") Frame frame) {
-        return -1;
+    public int getBci(@SuppressWarnings("unused") Frame frame) {
+        return -2;
+    }
+
+    @Override
+    protected boolean isTrivial() {
+        return substitution.isTrivial();
     }
 }

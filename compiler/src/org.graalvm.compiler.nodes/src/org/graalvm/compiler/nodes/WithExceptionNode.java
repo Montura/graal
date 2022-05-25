@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,13 +29,14 @@ import org.graalvm.compiler.graph.NodeClass;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodes.ProfileData.BranchProbabilityData;
 import org.graalvm.compiler.nodes.extended.ForeignCallWithExceptionNode;
-import org.graalvm.compiler.nodes.memory.MultiMemoryKill;
-import org.graalvm.compiler.nodes.memory.SingleMemoryKill;
+import org.graalvm.compiler.nodes.java.ExceptionObjectNode;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 
 /**
  * Base class for fixed nodes that have exactly two successors: A "next" successor for normal
  * execution, and an "exception edge" successor for exceptional control flow.
+ *
+ * @see ExceptionObjectNode
  */
 @NodeInfo
 public abstract class WithExceptionNode extends ControlSplitNode {
@@ -77,8 +78,10 @@ public abstract class WithExceptionNode extends ControlSplitNode {
 
     public void killExceptionEdge() {
         AbstractBeginNode edge = exceptionEdge();
-        setExceptionEdge(null);
-        GraphUtil.killCFG(edge);
+        if (edge != null) {
+            setExceptionEdge(null);
+            GraphUtil.killCFG(edge);
+        }
     }
 
     @Override
@@ -114,20 +117,5 @@ public abstract class WithExceptionNode extends ControlSplitNode {
         newExceptionEdge.setNext(graph().add(new UnreachableControlSinkNode()));
         setExceptionEdge(newExceptionEdge);
         return this;
-    }
-
-    /**
-     * Create a begin node appropriate as this node's next successor. In particular, if this node is
-     * a memory kill, this should create a {@link KillingBeginNode} or {@link MultiKillingBeginNode}
-     * with the appropriate location identities.
-     */
-    public AbstractBeginNode createNextBegin() {
-        if (this instanceof SingleMemoryKill) {
-            return KillingBeginNode.create(((SingleMemoryKill) this).getKilledLocationIdentity());
-        } else if (this instanceof MultiMemoryKill) {
-            return MultiKillingBeginNode.create(((MultiMemoryKill) this).getKilledLocationIdentities());
-        } else {
-            return new BeginNode();
-        }
     }
 }

@@ -27,8 +27,6 @@ package com.oracle.svm.hosted.code;
 import java.nio.file.Path;
 import java.util.Map;
 
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.nodes.java.LoadExceptionObjectNode;
 import org.graalvm.compiler.options.OptionValues;
@@ -60,13 +58,13 @@ class SubstrateLIRBackendFeature implements Feature, GraalFeature {
         ImageSingletons.add(NativeImageCodeCacheFactory.class, new NativeImageCodeCacheFactory() {
             @Override
             public NativeImageCodeCache newCodeCache(CompileQueue compileQueue, NativeImageHeap heap, Platform targetPlatform, Path tempDir) {
-                return new LIRNativeImageCodeCache(compileQueue.getCompilations(), heap);
+                return new LIRNativeImageCodeCache(compileQueue.getCompilationResults(), heap);
             }
         });
     }
 
     @Override
-    public void registerLowerings(RuntimeConfiguration runtimeConfig, OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers, SnippetReflectionProvider snippetReflection,
+    public void registerLowerings(RuntimeConfiguration runtimeConfig, OptionValues options, Providers providers,
                     Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings, boolean hosted) {
         lowerings.put(LoadExceptionObjectNode.class, new ExceptionSnippets.LoadExceptionObjectLowering());
     }

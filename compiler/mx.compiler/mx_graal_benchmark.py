@@ -1,7 +1,7 @@
 #
 # ----------------------------------------------------------------------------------------------------
 #
-# Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
 #
 # This code is free software; you can redistribute it and/or modify it
@@ -125,6 +125,24 @@ class JvmciJdkVm(mx_benchmark.OutputCapturingJavaVm):
 mx_benchmark.add_java_vm(JvmciJdkVm('server', 'default', ['-server', '-XX:-EnableJVMCI', '-XX:-UseJVMCICompiler']), _suite, 2)
 mx_benchmark.add_java_vm(JvmciJdkVm('server', 'hosted', ['-server', '-XX:+EnableJVMCI']), _suite, 3)
 
+def add_or_replace_arg(option_key, value, vm_option_list):
+    """
+    Determines if an option with the same key as option_key is already present in vm_option_list.
+    If so, it replaces the option value with the given one. If not, it appends the option
+    to the end of the list. It then returns the modified list.
+
+    For example, if arg_list contains the argument '-Dgraal.CompilerConfig=community', and this function
+    is called with an option_key of '-Dgraal.CompilerConfig' and a value of 'economy', the resulting
+    argument list will contain one instance of '-Dgraal.CompilerConfig=economy'.
+    """
+    arg_string = option_key + '=' + value
+    idx = next((idx for idx, arg in enumerate(vm_option_list) if arg.startswith(option_key)), -1)
+    if idx == -1:
+        vm_option_list.append(arg_string)
+    else:
+        vm_option_list[idx] = arg_string
+    return vm_option_list
+
 def build_jvmci_vm_variants(raw_name, raw_config_name, extra_args, variants, include_default=True, suite=None, priority=0, hosted=True):
     prefixes = [('', ['-XX:+UseJVMCICompiler'])]
     if hosted:
@@ -136,21 +154,36 @@ def build_jvmci_vm_variants(raw_name, raw_config_name, extra_args, variants, inc
             mx_benchmark.add_java_vm(
                 JvmciJdkVm(raw_name, extended_raw_config_name, extended_extra_args), suite, priority)
         for variant in variants:
+            compiler_config = None
             if len(variant) == 2:
                 var_name, var_args = variant
                 var_priority = priority
-            else:
+            elif len(variant) == 3:
                 var_name, var_args, var_priority = variant
+            elif len(variant) == 4:
+                var_name, var_args, var_priority, compiler_config = variant
+            else:
+                raise TypeError("unexpected tuple size for jvmci variant {} (size must be <= 4)".format(variant))
+
+            variant_args = extended_extra_args + var_args
+            if compiler_config is not None:
+                variant_args = add_or_replace_arg('-Dgraal.CompilerConfiguration', compiler_config, variant_args)
+
             mx_benchmark.add_java_vm(
-                JvmciJdkVm(raw_name, extended_raw_config_name + '-' + var_name, extended_extra_args + var_args), suite, var_priority)
+                JvmciJdkVm(raw_name, extended_raw_config_name + '-' + var_name, variant_args), suite, var_priority)
 
 _graal_variants = [
+    ('economy', [], 0, 'economy'),
     ('g1gc', ['-XX:+UseG1GC'], 12),
     ('no-comp-oops', ['-XX:-UseCompressedOops'], 0),
     ('no-splitting', ['-Dpolyglot.engine.Splitting=false'], 0),
     ('limit-truffle-inlining', ['-Dpolyglot.engine.InliningRecursionDepth=2'], 0),
     ('no-splitting-limit-truffle-inlining', ['-Dpolyglot.engine.Splitting=false', '-Dpolyglot.engine.InliningRecursionDepth=2'], 0),
-    ('no-truffle-bg-comp', ['-Dpolyglot.engine.BackgroundCompilation=false'], 0)
+    ('no-truffle-bg-comp', ['-Dpolyglot.engine.BackgroundCompilation=false'], 0),
+    ('avx0', ['-XX:UseAVX=0'], 11),
+    ('avx1', ['-XX:UseAVX=1'], 11),
+    ('avx2', ['-XX:UseAVX=2'], 11),
+    ('avx3', ['-XX:UseAVX=3'], 11),
 ]
 build_jvmci_vm_variants('server', 'graal-core', ['-server', '-XX:+EnableJVMCI', '-Dgraal.CompilerConfiguration=community', '-Djvmci.Compiler=graal'], _graal_variants, suite=_suite, priority=15)
 
@@ -180,7 +213,7 @@ class DebugValueBenchmarkMixin(object):
     def getBenchmarkName(self):
         raise NotImplementedError()
 
-    def benchSuiteName(self):
+    def benchSuiteName(self, bmSuiteArgs=None):
         raise NotImplementedError()
 
     def shorten_vm_flags(self, args):
@@ -391,7 +424,7 @@ class DaCapoTimingBenchmarkMixin(TimingBenchmarkMixin, CounterBenchmarkMixin, Me
 class DaCapoTimingBenchmarkSuite(DaCapoTimingBenchmarkMixin, DaCapoBenchmarkSuite): # pylint: disable=too-many-ancestors
     """DaCapo 9.12 (Bach) benchmark suite implementation."""
 
-    def benchSuiteName(self):
+    def benchSuiteName(self, bmSuiteArgs=None):
         return "dacapo"
 
 
@@ -401,7 +434,7 @@ mx_benchmark.add_bm_suite(DaCapoTimingBenchmarkSuite())
 class ScalaDaCapoTimingBenchmarkSuite(DaCapoTimingBenchmarkMixin, ScalaDaCapoBenchmarkSuite): # pylint: disable=too-many-ancestors
     """Scala DaCapo benchmark suite implementation."""
 
-    def benchSuiteName(self):
+    def benchSuiteName(self, bmSuiteArgs=None):
         return "scala-dacapo"
 
 
@@ -414,17 +447,19 @@ class JMHNativeImageBenchmarkMixin(mx_sdk_benchmark.NativeImageBenchmarkMixin):
         # JMH does HotSpot-specific field offset checks in class initializers
         return ['--initialize-at-build-time=org.openjdk.jmh,joptsimple.internal'] + super(JMHNativeImageBenchmarkMixin, self).extra_image_build_argument(benchmark, args)
 
-    def extra_run_arg(self, benchmark, args):
+    def extra_run_arg(self, benchmark, args, image_run_args):
         # JMH does not support forks with native-image. In the distant future we can capture this case.
-        return ['-f0'] + super(JMHNativeImageBenchmarkMixin, self).extra_run_arg(benchmark, args)
+        return ['-f0'] + super(JMHNativeImageBenchmarkMixin, self).extra_run_arg(benchmark, args, image_run_args)
 
-    def extra_agent_run_arg(self, benchmark, args):
+    def extra_agent_run_arg(self, benchmark, args, image_run_args):
         # Don't waste time and energy collecting reflection config.
-        return ['-f0', '-wi', '1', '-i1'] + super(JMHNativeImageBenchmarkMixin, self).extra_agent_run_arg(benchmark, args)
+        user_args = super(JMHNativeImageBenchmarkMixin, self).extra_agent_run_arg(benchmark, args, image_run_args)
+        return ['-f0', '-wi', '1', '-i1'] + mx_sdk_benchmark.strip_args_with_number(['-wi', '-i'], user_args)
 
-    def extra_profile_run_arg(self, benchmark, args):
+    def extra_profile_run_arg(self, benchmark, args, image_run_args):
         # Don't waste time profiling the same code but still wait for compilation on HotSpot.
-        return ['-f0', '-wi', '1', '-i5'] + super(JMHNativeImageBenchmarkMixin, self).extra_profile_run_arg(benchmark, args)
+        user_args = super(JMHNativeImageBenchmarkMixin, self).extra_profile_run_arg(benchmark, args, image_run_args)
+        return ['-f0', '-wi', '1', '-i5'] + mx_sdk_benchmark.strip_args_with_number(['-wi', '-i'], user_args)
 
     def benchmarkName(self):
         return self.name()
@@ -448,7 +483,10 @@ class JMHRunnerGraalCoreBenchmarkSuite(mx_benchmark.JMHRunnerBenchmarkSuite, JMH
         return "graal-compiler"
 
     def extraVmArgs(self):
-        return ['-XX:-UseJVMCIClassLoader'] + super(JMHRunnerGraalCoreBenchmarkSuite, self).extraVmArgs()
+        if mx_compiler.isJDK8:
+            return ['-XX:-UseJVMCIClassLoader'] + super(JMHRunnerGraalCoreBenchmarkSuite, self).extraVmArgs()
+        else:
+            return super(JMHRunnerGraalCoreBenchmarkSuite, self).extraVmArgs()
 
 
 mx_benchmark.add_bm_suite(JMHRunnerGraalCoreBenchmarkSuite())
@@ -482,7 +520,8 @@ class JMHDistGraalCoreBenchmarkSuite(mx_benchmark.JMHDistBenchmarkSuite, JMHNati
 
     def filter_distribution(self, dist):
         return super(JMHDistGraalCoreBenchmarkSuite, self).filter_distribution(dist) and \
-               not any(JMHDistWhiteboxBenchmarkSuite.whitebox_dependency(dist))
+               not any(JMHDistWhiteboxBenchmarkSuite.whitebox_dependency(dist)) and \
+               not any(dep.name.startswith('com.oracle.truffle.enterprise.dispatch.jmh') for dep in dist.deps)
 
 
 mx_benchmark.add_bm_suite(JMHDistGraalCoreBenchmarkSuite())
@@ -508,18 +547,17 @@ class JMHDistWhiteboxBenchmarkSuite(mx_benchmark.JMHDistBenchmarkSuite, JMHNativ
 
     def filter_distribution(self, dist):
         return super(JMHDistWhiteboxBenchmarkSuite, self).filter_distribution(dist) and \
-               any(JMHDistWhiteboxBenchmarkSuite.whitebox_dependency(dist))
+               any(JMHDistWhiteboxBenchmarkSuite.whitebox_dependency(dist)) and \
+               not any(dep.name.startswith('com.oracle.truffle.enterprise.dispatch.jmh') for dep in dist.deps)
+
 
     def extraVmArgs(self):
-        if mx_compiler.isJDK8:
-            extra = ['-XX:-UseJVMCIClassLoader']
-        else:
-            # This is required to use jdk.internal.module.Modules for doing arbitrary exports
-            extra = ['--add-exports=java.base/jdk.internal.module=ALL-UNNAMED',
-                     '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.services=ALL-UNNAMED',
-                     '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.runtime=ALL-UNNAMED',
-                     '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta=ALL-UNNAMED',
-                     '--add-exports=jdk.internal.vm.compiler/org.graalvm.compiler.graph=ALL-UNNAMED']
+        # This is required to use jdk.internal.module.Modules for doing arbitrary exports
+        extra = ['--add-exports=java.base/jdk.internal.module=ALL-UNNAMED',
+                 '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.services=ALL-UNNAMED',
+                 '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.runtime=ALL-UNNAMED',
+                 '--add-exports=jdk.internal.vm.ci/jdk.vm.ci.meta=ALL-UNNAMED',
+                 '--add-exports=jdk.internal.vm.compiler/org.graalvm.compiler.graph=ALL-UNNAMED']
         return extra + super(JMHDistWhiteboxBenchmarkSuite, self).extraVmArgs()
 
     def getJMHEntry(self, bmSuiteArgs):

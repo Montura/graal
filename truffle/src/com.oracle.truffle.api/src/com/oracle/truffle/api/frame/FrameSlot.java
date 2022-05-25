@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -47,7 +47,10 @@ import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
  * A slot in a {@link Frame} and {@link FrameDescriptor} that can store a value of a given type.
  *
  * @since 0.8 or earlier
+ * @deprecated use index-based slots instead
  */
+@SuppressWarnings("deprecation")
+@Deprecated(since = "22.0")
 public final class FrameSlot implements Cloneable {
 
     final FrameDescriptor descriptor;
@@ -73,8 +76,7 @@ public final class FrameSlot implements Cloneable {
     /**
      * Identifier of the slot.
      *
-     * @return value as specified in {@link FrameDescriptor#addFrameSlot(java.lang.Object)}
-     *         parameter
+     * @return value as specified in FrameDescriptor.addFrameSlot(java.lang.Object) parameter
      * @since 0.8 or earlier
      */
     public Object getIdentifier() {
@@ -85,7 +87,8 @@ public final class FrameSlot implements Cloneable {
      * Information about the slot.
      *
      * @return value as specified as second parameter of
-     *         {@link FrameDescriptor#addFrameSlot(java.lang.Object, java.lang.Object, com.oracle.truffle.api.frame.FrameSlotKind)}
+     *         FrameDescriptor.addFrameSlot(java.lang.Object, java.lang.Object,
+     *         com.oracle.truffle.api.frame.FrameSlotKind)
      * @since 0.8 or earlier
      */
     public Object getInfo() {
@@ -95,28 +98,24 @@ public final class FrameSlot implements Cloneable {
     /**
      * Index of the slot in the {@link FrameDescriptor}.
      *
-     * @return position of the slot computed after
-     *         {@link FrameDescriptor#addFrameSlot(java.lang.Object, java.lang.Object, com.oracle.truffle.api.frame.FrameSlotKind)
-     *         adding} it.
+     * @return position of the slot computed after adding it.
      * @since 0.8 or earlier
-     * @deprecated in 1.0 without replacement
+     * @deprecated in 19.0 without replacement
      */
-    @Deprecated
+    @Deprecated(since = "19.0")
     public int getIndex() {
         return index;
     }
 
     /**
-     * Kind of the slot. Specified either at
-     * {@link FrameDescriptor#addFrameSlot(java.lang.Object, com.oracle.truffle.api.frame.FrameSlotKind)
-     * creation time} or updated via
-     * {@link FrameDescriptor#setFrameSlotKind(FrameSlot, FrameSlotKind)} method.
+     * Kind of the slot. Specified either at creation time or updated via
+     * FrameDescriptor.setFrameSlotKind(FrameSlot, FrameSlotKind).
      *
      * @return current kind of this slot
      * @since 0.8 or earlier
-     * @deprecated in 1.0 use {@link FrameDescriptor#getFrameSlotKind(FrameSlot)} instead.
+     * @deprecated in 19.0 use FrameDescriptor.getFrameSlotKind(FrameSlot) instead.
      */
-    @Deprecated
+    @Deprecated(since = "19.0")
     public FrameSlotKind getKind() {
         return descriptor.getFrameSlotKind(this);
     }
@@ -128,10 +127,9 @@ public final class FrameSlot implements Cloneable {
      *
      * @param kind new kind of the slot
      * @since 0.8 or earlier
-     * @deprecated in 1.0 use {@link FrameDescriptor#setFrameSlotKind(FrameSlot, FrameSlotKind)}
-     *             instead.
+     * @deprecated in 19.0 use FrameDescriptor.setFrameSlotKind(FrameSlot, FrameSlotKind) instead.
      */
-    @Deprecated
+    @Deprecated(since = "19.0")
     public void setKind(final FrameSlotKind kind) {
         descriptor.setFrameSlotKind(this, kind);
     }

@@ -24,6 +24,16 @@
  */
 package com.oracle.svm.hosted.jdk;
 
+import java.awt.GraphicsEnvironment;
+
+import org.graalvm.nativeimage.ImageSingletons;
+import org.graalvm.nativeimage.Platform;
+import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.hosted.Feature;
+import org.graalvm.nativeimage.impl.ConfigurationCondition;
+import org.graalvm.nativeimage.impl.InternalPlatform;
+
+import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.configure.ResourcesRegistry;
 import com.oracle.svm.core.jdk.JNIRegistrationUtil;
@@ -32,14 +42,6 @@ import com.oracle.svm.core.jdk.PlatformNativeLibrarySupport;
 import com.oracle.svm.core.jni.JNIRuntimeAccess;
 import com.oracle.svm.hosted.FeatureImpl;
 import com.oracle.svm.hosted.c.NativeLibraries;
-import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
-import org.graalvm.nativeimage.ImageSingletons;
-import org.graalvm.nativeimage.Platform;
-import org.graalvm.nativeimage.Platforms;
-import org.graalvm.nativeimage.hosted.Feature;
-import org.graalvm.nativeimage.impl.InternalPlatform;
-
-import java.awt.GraphicsEnvironment;
 
 @Platforms({InternalPlatform.PLATFORM_JNI.class})
 @AutomaticFeature
@@ -48,7 +50,7 @@ public class JNIRegistrationAwt extends JNIRegistrationUtil implements Feature {
 
     @Override
     public void beforeAnalysis(BeforeAnalysisAccess access) {
-        if (JavaVersionUtil.JAVA_SPEC >= 11 && Platform.includedIn(Platform.LINUX.class)) {
+        if (Platform.includedIn(Platform.LINUX.class)) {
             access.registerReachabilityHandler(JNIRegistrationAwt::handlePreferencesClassReachable,
                             clazz(access, "java.awt.Toolkit"),
                             clazz(access, "sun.java2d.cmm.lcms.LCMS"),
@@ -59,9 +61,13 @@ public class JNIRegistrationAwt extends JNIRegistrationUtil implements Feature {
                             clazz(access, "sun.awt.X11GraphicsEnvironment"),
                             clazz(access, "sun.font.FontManagerNativeLibrary"),
                             clazz(access, "sun.java2d.Disposer"));
+            PlatformNativeLibrarySupport.singleton().addBuiltinPkgNativePrefix("java_awt");
+            PlatformNativeLibrarySupport.singleton().addBuiltinPkgNativePrefix("sun_awt");
+            PlatformNativeLibrarySupport.singleton().addBuiltinPkgNativePrefix("sun_java2d");
 
             access.registerReachabilityHandler(JNIRegistrationAwt::registerFreeType,
                             clazz(access, "sun.font.FontManagerNativeLibrary"));
+            PlatformNativeLibrarySupport.singleton().addBuiltinPkgNativePrefix("sun_font");
 
             access.registerReachabilityHandler(JNIRegistrationAwt::registerLCMS,
                             clazz(access, "sun.java2d.cmm.lcms.LCMS"));
@@ -73,6 +79,7 @@ public class JNIRegistrationAwt extends JNIRegistrationUtil implements Feature {
                             clazz(access, "sun.awt.image.JPEGImageDecoder"),
                             clazz(access, "com.sun.imageio.plugins.jpeg.JPEGImageReader"),
                             clazz(access, "com.sun.imageio.plugins.jpeg.JPEGImageWriter"));
+            PlatformNativeLibrarySupport.singleton().addBuiltinPkgNativePrefix("com_sun_imageio_plugins_jpeg");
 
             access.registerReachabilityHandler(JNIRegistrationAwt::registerColorProfiles,
                             clazz(access, "java.awt.color.ICC_Profile"));
@@ -114,10 +121,6 @@ public class JNIRegistrationAwt extends JNIRegistrationUtil implements Feature {
             nativeLibraries.addDynamicNonJniLibrary("Xi");
         }
 
-        PlatformNativeLibrarySupport.singleton().addBuiltinPkgNativePrefix("java_awt");
-        PlatformNativeLibrarySupport.singleton().addBuiltinPkgNativePrefix("sun_awt");
-        PlatformNativeLibrarySupport.singleton().addBuiltinPkgNativePrefix("sun_java2d");
-
         nativeLibraries.addDynamicNonJniLibrary("stdc++");
         nativeLibraries.addDynamicNonJniLibrary("m");
 
@@ -126,9 +129,6 @@ public class JNIRegistrationAwt extends JNIRegistrationUtil implements Feature {
     }
 
     private static void registerJPEG(DuringAnalysisAccess access) {
-
-        PlatformNativeLibrarySupport.singleton().addBuiltinPkgNativePrefix("com_sun_imageio_plugins_jpeg");
-
         NativeLibraries nativeLibraries = getNativeLibraries(access);
 
         NativeLibrarySupport.singleton().preregisterUninitializedBuiltinLibrary("javajpeg");
@@ -150,14 +150,17 @@ public class JNIRegistrationAwt extends JNIRegistrationUtil implements Feature {
     }
 
     private static void registerFreeType(DuringAnalysisAccess access) {
+        if (SubstrateOptions.StaticExecutable.getValue()) {
+            /*
+             * Freetype uses fontconfig through dlsym. This may not work in a statically linked
+             * executable
+             */
+            return;
+        }
         NativeLibraries nativeLibraries = getNativeLibraries(access);
 
         NativeLibrarySupport.singleton().preregisterUninitializedBuiltinLibrary("fontmanager");
         nativeLibraries.addStaticJniLibrary("fontmanager", isHeadless() ? "awt_headless" : "awt_xawt");
-        nativeLibraries.addStaticJniLibrary("harfbuzz");
-
-        PlatformNativeLibrarySupport.singleton().addBuiltinPkgNativePrefix("sun_font");
-
         nativeLibraries.addDynamicNonJniLibrary("freetype");
 
         JNIRuntimeAccess.register(clazz(access, "sun.font.FontConfigManager$FontConfigInfo"));
@@ -171,33 +174,33 @@ public class JNIRegistrationAwt extends JNIRegistrationUtil implements Feature {
 
     private static void registerColorProfiles(DuringAnalysisAccess duringAnalysisAccess) {
         ResourcesRegistry resourcesRegistry = ImageSingletons.lookup(ResourcesRegistry.class);
-        resourcesRegistry.addResources("sun.java2d.cmm.profiles.*");
+        resourcesRegistry.addResources(ConfigurationCondition.alwaysTrue(), "sun.java2d.cmm.profiles.*");
     }
 
     private static void registerFlavorMapProps(DuringAnalysisAccess duringAnalysisAccess) {
         ResourcesRegistry resourcesRegistry = ImageSingletons.lookup(ResourcesRegistry.class);
-        resourcesRegistry.addResources("sun.datatransfer.resources.flavormap.properties");
+        resourcesRegistry.addResources(ConfigurationCondition.alwaysTrue(), "sun.datatransfer.resources.flavormap.properties");
     }
 
     private static void registerRTFReaderCharsets(DuringAnalysisAccess duringAnalysisAccess) {
         ResourcesRegistry resourcesRegistry = ImageSingletons.lookup(ResourcesRegistry.class);
-        resourcesRegistry.addResources("javax.swing.text.rtf.charsets.*");
+        resourcesRegistry.addResources(ConfigurationCondition.alwaysTrue(), "javax.swing.text.rtf.charsets.*");
     }
 
     private static void registerOceanThemeIcons(DuringAnalysisAccess duringAnalysisAccess) {
         ResourcesRegistry resourcesRegistry = ImageSingletons.lookup(ResourcesRegistry.class);
-        resourcesRegistry.addResources("javax.swing.plaf.metal.icons.*");
-        resourcesRegistry.addResources("javax.swing.plaf.basic.icons.*");
+        resourcesRegistry.addResources(ConfigurationCondition.alwaysTrue(), "javax.swing.plaf.metal.icons.*");
+        resourcesRegistry.addResources(ConfigurationCondition.alwaysTrue(), "javax.swing.plaf.basic.icons.*");
     }
 
     private static void registerHtml32bdtd(DuringAnalysisAccess duringAnalysisAccess) {
         ResourcesRegistry resourcesRegistry = ImageSingletons.lookup(ResourcesRegistry.class);
-        resourcesRegistry.addResources("javax.swing.text.html.parser.html32.bdtd");
+        resourcesRegistry.addResources(ConfigurationCondition.alwaysTrue(), "javax.swing.text.html.parser.html32.bdtd");
     }
 
     private static void registerDefaultCSS(DuringAnalysisAccess duringAnalysisAccess) {
         ResourcesRegistry resourcesRegistry = ImageSingletons.lookup(ResourcesRegistry.class);
-        resourcesRegistry.addResources("javax.swing.text.html.default.css");
+        resourcesRegistry.addResources(ConfigurationCondition.alwaysTrue(), "javax.swing.text.html.default.css");
     }
 
     private static NativeLibraries getNativeLibraries(DuringAnalysisAccess access) {

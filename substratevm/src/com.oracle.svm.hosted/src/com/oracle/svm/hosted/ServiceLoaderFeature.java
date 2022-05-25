@@ -28,6 +28,8 @@ import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Modifier;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -54,6 +56,7 @@ import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.jdk.Resources;
 import com.oracle.svm.core.option.HostedOptionKey;
 import com.oracle.svm.core.option.LocatableMultiOptionValue;
+import com.oracle.svm.core.option.OptionUtils;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.UserError;
 import com.oracle.svm.hosted.FeatureImpl.DuringAnalysisAccessImpl;
@@ -110,14 +113,21 @@ public class ServiceLoaderFeature implements Feature {
     }
 
     /**
-     * Services that should not be processes here, for example because they are handled by
+     * Services that should not be processed here, for example because they are handled by
      * specialized features.
      */
-    private final Set<String> servicesToSkip = new HashSet<>(Arrays.asList(
-                    "java.security.Provider",                       // see SecurityServicesFeature
-                    "sun.util.locale.provider.LocaleDataMetaInfo",  // see LocaleSubstitutions
-                    "org.graalvm.nativeimage.Platform"  // shouldn't be reachable after
-                                                        // intrinsification
+    protected final Set<String> servicesToSkip = new HashSet<>(Arrays.asList(
+                    // image builder internal ServiceLoader interfaces
+                    "com.oracle.svm.hosted.NativeImageClassLoaderPostProcessing",
+                    "com.oracle.svm.hosted.agent.NativeImageBytecodeInstrumentationAgentExtension",
+                    "org.graalvm.nativeimage.Platform",
+                    /*
+                     * Loaded in java.util.random.RandomGeneratorFactory.FactoryMapHolder, which is
+                     * initialized at image build time.
+                     */
+                    "java.util.random.RandomGenerator",
+                    "java.security.Provider",                     // see SecurityServicesFeature
+                    "sun.util.locale.provider.LocaleDataMetaInfo" // see LocaleSubstitutions
     ));
 
     // NOTE: Platform class had to be added to this list since our analysis discovers that
@@ -126,7 +136,7 @@ public class ServiceLoaderFeature implements Feature {
     // before because implementation classes were instantiated using runtime reflection instead of
     // ServiceLoader (and thus weren't reachable in analysis).
 
-    private final Set<String> serviceProvidersToSkip = new HashSet<>(Arrays.asList(
+    protected final Set<String> serviceProvidersToSkip = new HashSet<>(Arrays.asList(
                     "com.sun.jndi.rmi.registry.RegistryContextFactory"      // GR-26547
     ));
 
@@ -154,8 +164,8 @@ public class ServiceLoaderFeature implements Feature {
     @Override
     public void afterRegistration(AfterRegistrationAccess access) {
         // TODO write a more sophisticated include/exclude filter to handle cases like GR-27605 ?
-        servicesToSkip.addAll(Options.ServiceLoaderFeatureExcludeServices.getValue().values());
-        serviceProvidersToSkip.addAll(Options.ServiceLoaderFeatureExcludeServiceProviders.getValue().values());
+        servicesToSkip.addAll(OptionUtils.flatten(",", Options.ServiceLoaderFeatureExcludeServices.getValue().values()));
+        serviceProvidersToSkip.addAll(OptionUtils.flatten(",", Options.ServiceLoaderFeatureExcludeServiceProviders.getValue().values()));
     }
 
     @Override
@@ -288,7 +298,10 @@ public class ServiceLoaderFeature implements Feature {
 
             Class<?> implementationClass = access.findClassByName(implementationClassName);
             if (implementationClass == null) {
-                throw UserError.abort("Could not find registered service implementation class `%s` for service `%s`", implementationClassName, serviceClassName);
+                if (trace) {
+                    System.out.println("Could not find registered service implementation class `" + implementationClassName + "` for service `" + serviceClassName + "`");
+                }
+                continue;
             }
             try {
                 access.getMetaAccess().lookupJavaType(implementationClass);
@@ -304,6 +317,7 @@ public class ServiceLoaderFeature implements Feature {
                 continue;
             }
 
+            Constructor<?> nullaryConstructor;
             try {
                 /*
                  * Check if the implementation class has a nullary constructor. The
@@ -313,15 +327,30 @@ public class ServiceLoaderFeature implements Feature {
                  * service classes that don't respect the requirement. On HotSpot trying to load
                  * such a service would lead to a ServiceConfigurationError.
                  */
-                implementationClass.getDeclaredConstructor();
-            } catch (NoSuchMethodException ex) {
+                nullaryConstructor = implementationClass.getDeclaredConstructor();
+            } catch (ReflectiveOperationException | NoClassDefFoundError ex) {
+                if (trace) {
+                    System.out.println("  cannot resolve a nullary constructor for " + implementationClassName + ": " + ex.getMessage());
+                }
                 continue;
             }
 
             /* Allow Class.forName at run time for the service implementation. */
             RuntimeReflection.register(implementationClass);
-            /* Allow reflective instantiation at run time for the service implementation. */
-            RuntimeReflection.registerForReflectiveInstantiation(implementationClass);
+            if (implementationClass.isArray() || implementationClass.isInterface() || Modifier.isAbstract(implementationClass.getModifiers())) {
+                if (trace) {
+                    System.out.println("  Warning: class cannot be instantiated (fail lazy): " + implementationClassName);
+                }
+                /*
+                 * The class cannot be instantiated. However since java.util.ServiceLoader.stream()
+                 * does not force instantiation, we must not fail eagerly. To do so, we need to
+                 * register the nullary constructor since it is accessed during stream processing.
+                 */
+                RuntimeReflection.register(nullaryConstructor);
+            } else {
+                /* Allow reflective instantiation at run time for the service implementation. */
+                RuntimeReflection.registerForReflectiveInstantiation(implementationClass);
+            }
 
             /* Add line to the new resource that will be available at run time. */
             newResourceValue.append(implementationClass.getName());
@@ -333,7 +362,7 @@ public class ServiceLoaderFeature implements Feature {
         try (DebugContext.Scope s = debugContext.scope("registerResource")) {
             debugContext.log("ServiceLoaderFeature: registerResource: " + serviceResourceLocation);
         }
-        Resources.registerResource(serviceResourceLocation, new ByteArrayInputStream(newResourceValue.toString().getBytes(StandardCharsets.UTF_8)));
+        Resources.registerResource(null, serviceResourceLocation, new ByteArrayInputStream(newResourceValue.toString().getBytes(StandardCharsets.UTF_8)), false);
 
         /* Ensure that the static analysis runs again for the new implementation classes. */
         access.requireAnalysisIteration();

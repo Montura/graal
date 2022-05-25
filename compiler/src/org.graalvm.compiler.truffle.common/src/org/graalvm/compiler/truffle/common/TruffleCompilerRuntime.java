@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -245,13 +245,6 @@ public interface TruffleCompilerRuntime {
     TruffleCompiler getTruffleCompiler(CompilableTruffleAST compilable);
 
     /**
-     * Gets a plan for inlining in terms of a Truffle AST call graph.
-     *
-     * @return the requested plan or {@code null} a plan cannot be created in the calling context
-     */
-    TruffleMetaAccessProvider createInliningPlan();
-
-    /**
      * Gets the {@link CompilableTruffleAST} represented by {@code constant}.
      *
      * @return {@code null} if {@code constant} does not represent a {@link CompilableTruffleAST} or
@@ -444,6 +437,11 @@ public interface TruffleCompilerRuntime {
      * from 0 up to but not including the return value.
      */
     int getFrameSlotKindTagsCount();
+
+    /**
+     * Determines if {@code method} can be inlined by the runtime (independently from Truffle).
+     */
+    boolean isInlineable(ResolvedJavaMethod method);
 
     /**
      * Determines if {@code method} is annotated by {@code TruffleBoundary}.

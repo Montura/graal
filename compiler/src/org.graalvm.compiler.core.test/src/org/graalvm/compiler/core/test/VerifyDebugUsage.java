@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -106,15 +106,14 @@ public class VerifyDebugUsage extends VerifyStringFormatterUsage {
      * parameter bound to {@link DebugContext#BASIC_LEVEL} and the {@code object} parameter bound to
      * a {@link StructuredGraph} value.
      *
-     * This whitelist exists to ensure any increase in graph dumps is in line with the policy
+     * This allow list exists to ensure any increase in graph dumps is in line with the policy
      * outlined by {@link DebugContext#BASIC_LEVEL}. If you add a *justified* graph dump at this
-     * level, then update the whitelist.
+     * level, then update the allow list.
      */
-    private static final Set<String> BasicLevelStructuredGraphDumpWhitelist = new HashSet<>(Arrays.asList(
+    private static final Set<String> BasicLevelStructuredGraphDumpAllowList = new HashSet<>(Arrays.asList(
                     "org.graalvm.compiler.phases.BasePhase.dumpAfter",
                     "org.graalvm.compiler.phases.BasePhase.dumpBefore",
                     "org.graalvm.compiler.core.GraalCompiler.emitFrontEnd",
-                    "org.graalvm.compiler.truffle.compiler.PartialEvaluator.inliningGraphPE",
                     "org.graalvm.compiler.truffle.compiler.PerformanceInformationHandler.reportPerformanceWarnings",
                     "org.graalvm.compiler.truffle.compiler.TruffleCompilerImpl.compilePEGraph",
                     "org.graalvm.compiler.core.test.VerifyDebugUsageTest$ValidDumpUsagePhase.run",
@@ -128,11 +127,11 @@ public class VerifyDebugUsage extends VerifyStringFormatterUsage {
      * parameter bound to {@link DebugContext#INFO_LEVEL} and the {@code object} parameter bound to
      * a {@link StructuredGraph} value.
      *
-     * This whitelist exists to ensure any increase in graph dumps is in line with the policy
+     * This allow list exists to ensure any increase in graph dumps is in line with the policy
      * outlined by {@link DebugContext#INFO_LEVEL}. If you add a *justified* graph dump at this
-     * level, then update the whitelist.
+     * level, then update the allow list.
      */
-    private static final Set<String> InfoLevelStructuredGraphDumpWhitelist = new HashSet<>(Arrays.asList(
+    private static final Set<String> InfoLevelStructuredGraphDumpAllowList = new HashSet<>(Arrays.asList(
                     "org.graalvm.compiler.core.GraalCompiler.emitFrontEnd",
                     "org.graalvm.compiler.phases.BasePhase.dumpAfter",
                     "org.graalvm.compiler.replacements.ReplacementsImpl$GraphMaker.makeGraph",
@@ -193,17 +192,17 @@ public class VerifyDebugUsage extends VerifyStringFormatterUsage {
         if (dumpLevel == DebugContext.BASIC_LEVEL) {
             StackTraceElement e = callerGraph.method().asStackTraceElement(debugCallTarget.invoke().bci());
             String qualifiedMethod = e.getClassName() + "." + e.getMethodName();
-            if (!BasicLevelStructuredGraphDumpWhitelist.contains(qualifiedMethod)) {
+            if (!BasicLevelStructuredGraphDumpAllowList.contains(qualifiedMethod)) {
                 throw new VerificationError(
-                                "In %s: call to %s with level == DebugContext.BASIC_LEVEL not in %s.BasicLevelDumpWhitelist.%n", e, verifiedCallee.format("%H.%n(%p)"),
+                                "In %s: call to %s with level == DebugContext.BASIC_LEVEL not in %s.BasicLevelDumpAllowList.%n", e, verifiedCallee.format("%H.%n(%p)"),
                                 getClass().getName());
             }
         } else if (dumpLevel == DebugContext.INFO_LEVEL) {
             StackTraceElement e = callerGraph.method().asStackTraceElement(debugCallTarget.invoke().bci());
             String qualifiedMethod = e.getClassName() + "." + e.getMethodName();
-            if (!InfoLevelStructuredGraphDumpWhitelist.contains(qualifiedMethod)) {
+            if (!InfoLevelStructuredGraphDumpAllowList.contains(qualifiedMethod)) {
                 throw new VerificationError(
-                                "In %s: call to %s with level == Debug.INFO_LEVEL not in %s.InfoLevelDumpWhitelist.%n", e, verifiedCallee.format("%H.%n(%p)"),
+                                "In %s: call to %s with level == Debug.INFO_LEVEL not in %s.InfoLevelDumpAllowList.%n", e, verifiedCallee.format("%H.%n(%p)"),
                                 getClass().getName());
             }
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -129,8 +129,8 @@ public class LoopUnswitchTest extends GraalCompilerTest {
         new LoopUnswitchingPhase(new DefaultLoopPolicies()).apply(graph, getDefaultHighTierContext());
 
         // Framestates create comparison problems
-        graph.clearAllStateAfter();
-        referenceGraph.clearAllStateAfter();
+        graph.clearAllStateAfterForTestingOnly();
+        referenceGraph.clearAllStateAfterForTestingOnly();
 
         createCanonicalizerPhase().apply(graph, getProviders());
         createCanonicalizerPhase().apply(referenceGraph, getProviders());

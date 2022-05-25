@@ -24,38 +24,46 @@
  */
 package com.oracle.svm.reflect.target;
 
-// Checkstyle: allow reflection
+import static com.oracle.svm.core.annotate.TargetElement.CONSTRUCTOR_NAME;
 
-import java.lang.reflect.AnnotatedType;
+import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Executable;
 
-import org.graalvm.compiler.serviceprovider.JavaVersionUtil;
+import org.graalvm.nativeimage.ImageSingletons;
 
 import com.oracle.svm.core.annotate.Alias;
-import com.oracle.svm.core.annotate.Inject;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
-import com.oracle.svm.core.annotate.RecomputeFieldValue.CustomFieldValueComputer;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.util.VMError;
-import com.oracle.svm.reflect.hosted.AccessorComputer;
+import com.oracle.svm.hosted.image.NativeImageCodeCache;
+import com.oracle.svm.reflect.hosted.ExecutableAccessorComputer;
+import com.oracle.svm.reflect.hosted.ReflectionMetadataComputer;
 
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaField;
-import sun.reflect.generics.repository.ConstructorRepository;
 
 @TargetClass(value = Constructor.class)
 public final class Target_java_lang_reflect_Constructor {
 
-    @Alias ConstructorRepository genericInfo;
+    @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = AnnotationsComputer.class)//
+    byte[] annotations;
+
+    @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = ParameterAnnotationsComputer.class)//
+    byte[] parameterAnnotations;
 
     @Alias //
-    @RecomputeFieldValue(kind = Kind.Custom, declClass = AccessorComputer.class) //
+    @RecomputeFieldValue(kind = Kind.Custom, declClass = ExecutableAccessorComputer.class) //
     Target_jdk_internal_reflect_ConstructorAccessor constructorAccessor;
 
-    @Inject @RecomputeFieldValue(kind = Kind.Custom, declClass = ConstructorAnnotatedReceiverTypeComputer.class) //
-    AnnotatedType annotatedReceiverType;
+    @Alias
+    @TargetElement(name = CONSTRUCTOR_NAME)
+    @SuppressWarnings("hiding")
+    public native void constructor(Class<?> declaringClass, Class<?>[] parameterTypes, Class<?>[] checkedExceptions, int modifiers, int slot, String signature, byte[] annotations,
+                    byte[] parameterAnnotations);
 
     @Alias
     native Target_java_lang_reflect_Constructor copy();
@@ -63,31 +71,22 @@ public final class Target_java_lang_reflect_Constructor {
     @Substitute
     Target_jdk_internal_reflect_ConstructorAccessor acquireConstructorAccessor() {
         if (constructorAccessor == null) {
-            throw VMError.unsupportedFeature("Runtime reflection is not supported.");
+            throw VMError.unsupportedFeature("Runtime reflection is not supported for " + this);
         }
         return constructorAccessor;
     }
 
-    @Substitute
-    public AnnotatedType getAnnotatedReceiverType() {
-        Target_java_lang_reflect_Constructor holder = ReflectionHelper.getHolder(this);
-        return JavaVersionUtil.JAVA_SPEC == 8
-                        ? ReflectionHelper.requireNonNull(holder.annotatedReceiverType, "Annotated receiver type must be computed during native image generation")
-                        : holder.annotatedReceiverType; // can be null (JDK-8044629)
-    }
-
-    /**
-     * The Constructor.annotatedReceiverType computation is needed, even though there is a similar
-     * computation for Executable.annotatedReceiverType, because the Constructor class overrides
-     * Executable.getAnnotatedReceiverType().
-     */
-    public static final class ConstructorAnnotatedReceiverTypeComputer implements CustomFieldValueComputer {
-
+    static class AnnotationsComputer extends ReflectionMetadataComputer {
         @Override
         public Object compute(MetaAccessProvider metaAccess, ResolvedJavaField original, ResolvedJavaField annotated, Object receiver) {
-            Constructor<?> constructor = (Constructor<?>) receiver;
-            return constructor.getAnnotatedReceiverType();
+            return ImageSingletons.lookup(NativeImageCodeCache.ReflectionMetadataEncoder.class).getAnnotationsEncoding((AccessibleObject) receiver);
         }
     }
 
+    static class ParameterAnnotationsComputer extends ReflectionMetadataComputer {
+        @Override
+        public Object compute(MetaAccessProvider metaAccess, ResolvedJavaField original, ResolvedJavaField annotated, Object receiver) {
+            return ImageSingletons.lookup(NativeImageCodeCache.ReflectionMetadataEncoder.class).getParameterAnnotationsEncoding((Executable) receiver);
+        }
+    }
 }

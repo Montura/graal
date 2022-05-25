@@ -127,6 +127,9 @@ public final class Support {
     }
 
     public static String fromCString(CCharPointer s) {
+        if (s.isNull()) {
+            return null;
+        }
         return CTypeConversion.toJavaString(s, SubstrateUtil.strlen(s), StandardCharsets.UTF_8);
     }
 
@@ -153,6 +156,10 @@ public final class Support {
     public static CCharPointerHolder toCString(String s) {
         // TODO: this is supposed to produce modified UTF-8 when used with JNI.
         return CTypeConversion.toCString(s);
+    }
+
+    public static boolean isSerializable(JNIEnvironment env, JNIObjectHandle serializeTargetClass) {
+        return jniFunctions().getIsAssignableFrom().invoke(env, serializeTargetClass, JvmtiAgentBase.singleton().handles().javaIoSerializable);
     }
 
     public static JNIObjectHandle getCallerClass(int depth) {
@@ -234,18 +241,6 @@ public final class Support {
         return methodName;
     }
 
-    public static JNIObjectHandle getObjectField(JNIEnvironment env, JNIObjectHandle clazz, JNIObjectHandle obj, String name, String signature) {
-        try (CCharPointerHolder nameHolder = toCString(name);
-                        CCharPointerHolder sigHolder = toCString(signature);) {
-            JNIFieldId fieldId = jniFunctions().getGetFieldID().invoke(env, clazz, nameHolder.get(), sigHolder.get());
-            if (nullHandle().notEqual(fieldId)) {
-                return jniFunctions().getGetObjectField().invoke(env, obj, fieldId);
-            } else {
-                return nullHandle();
-            }
-        }
-    }
-
     public static boolean clearException(JNIEnvironment localEnv) {
         if (jniFunctions().getExceptionCheck().invoke(localEnv)) {
             jniFunctions().getExceptionClear().invoke(localEnv);
@@ -262,13 +257,19 @@ public final class Support {
         return false;
     }
 
-    public static JNIObjectHandle handleException(JNIEnvironment localEnv) {
+    public static JNIObjectHandle handleException(JNIEnvironment localEnv, boolean clear) {
         if (jniFunctions().getExceptionCheck().invoke(localEnv)) {
             JNIObjectHandle exception = jniFunctions().getExceptionOccurred().invoke(localEnv);
-            jniFunctions().getExceptionClear().invoke(localEnv);
+            if (clear) {
+                jniFunctions().getExceptionClear().invoke(localEnv);
+            }
             return exception;
         }
         return nullHandle();
+    }
+
+    public static JNIObjectHandle readObjectField(JNIEnvironment env, JNIObjectHandle obj, JNIFieldId fieldId) {
+        return jniFunctions().getGetObjectField().invoke(env, obj, fieldId);
     }
 
     /*
@@ -310,6 +311,11 @@ public final class Support {
         args.addressOf(2).setObject(l2);
         args.addressOf(3).setObject(l3);
         return jniFunctions().getCallObjectMethodA().invoke(env, obj, method, args);
+    }
+
+    public static JNIObjectHandle callStaticObjectMethod(JNIEnvironment env, JNIObjectHandle clazz, JNIMethodId method) {
+        JNIValue args = StackValue.get(0, JNIValue.class);
+        return jniFunctions().getCallStaticObjectMethodA().invoke(env, clazz, method, args);
     }
 
     public static JNIObjectHandle callStaticObjectMethodL(JNIEnvironment env, JNIObjectHandle clazz, JNIMethodId method, JNIObjectHandle l0) {
@@ -371,6 +377,12 @@ public final class Support {
         jniFunctions().getCallStaticVoidMethodA().invoke(env, clazz, method, args);
     }
 
+    public static boolean callStaticBooleanMethodL(JNIEnvironment env, JNIObjectHandle clazz, JNIMethodId method, JNIObjectHandle l0) {
+        JNIValue args = StackValue.get(1, JNIValue.class);
+        args.addressOf(0).setObject(l0);
+        return jniFunctions().getCallStaticBooleanMethodA().invoke(env, clazz, method, args);
+    }
+
     public static boolean callBooleanMethod(JNIEnvironment env, JNIObjectHandle obj, JNIMethodId method) {
         return jniFunctions().getCallBooleanMethodA().invoke(env, obj, method, nullPointer());
     }
@@ -417,10 +429,21 @@ public final class Support {
         guarantee(resultCode.equals(JvmtiError.JVMTI_ERROR_NONE), "JVMTI call failed with " + resultCode.name());
     }
 
+    public static void checkPhase(JvmtiError resultCode) throws WrongPhaseException {
+        if (resultCode == JvmtiError.JVMTI_ERROR_WRONG_PHASE) {
+            throw new WrongPhaseException();
+        }
+        check(resultCode);
+    }
+
     public static void checkJni(int resultCode) {
         guarantee(resultCode == JNIErrors.JNI_OK());
     }
 
     private Support() {
+    }
+
+    public static class WrongPhaseException extends Exception {
+        private static final long serialVersionUID = 8503239518909756105L;
     }
 }

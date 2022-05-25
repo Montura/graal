@@ -24,17 +24,17 @@
 package com.oracle.truffle.espresso.runtime;
 
 import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
+import com.oracle.truffle.api.exception.AbstractTruffleException;
 import com.oracle.truffle.espresso.impl.ContextAccess;
 import com.oracle.truffle.espresso.meta.EspressoError;
-import com.oracle.truffle.espresso.meta.Meta;
-import com.oracle.truffle.espresso.substitutions.Target_java_lang_Thread;
+import com.oracle.truffle.espresso.threads.EspressoThreadRegistry;
 
 class EspressoShutdownHandler implements ContextAccess {
 
     // region context
 
     private final EspressoContext context;
-    private final EspressoThreadManager threadManager;
+    private final EspressoThreadRegistry threadManager;
     private final EspressoReferenceDrainer referenceDrainer;
     private final boolean softExit;
 
@@ -46,7 +46,7 @@ class EspressoShutdownHandler implements ContextAccess {
     // endregion context
 
     EspressoShutdownHandler(EspressoContext context,
-                    EspressoThreadManager threadManager,
+                    EspressoThreadRegistry threadManager,
                     EspressoReferenceDrainer referenceDrainer, boolean softExit) {
         this.context = context;
         this.threadManager = threadManager;
@@ -110,9 +110,8 @@ class EspressoShutdownHandler implements ContextAccess {
     @TruffleBoundary
     void doExit(int code) {
         getContext().getLogger().fine(() -> {
-            Meta meta = getMeta();
             StaticObject currentThread = getContext().getCurrentThread();
-            String guestName = Target_java_lang_Thread.getThreadName(meta, currentThread);
+            String guestName = getThreadAccess().getThreadName(currentThread);
             return "doExit(" + code + ") from " + guestName;
         });
         if (!isClosing()) {
@@ -154,7 +153,7 @@ class EspressoShutdownHandler implements ContextAccess {
         waitForClose();
         try {
             getMeta().java_lang_Shutdown_shutdown.invokeDirect(null);
-        } catch (EspressoException | EspressoExitException e) {
+        } catch (AbstractTruffleException e) {
             /* Suppress guest exception so as not to bypass teardown */
         }
         if (isClosing()) {
@@ -197,7 +196,7 @@ class EspressoShutdownHandler implements ContextAccess {
 
     private boolean hasActiveNonDaemon(Thread initiating) {
         for (StaticObject guest : threadManager.activeThreads()) {
-            Thread host = Target_java_lang_Thread.getHostFromGuestThread(guest);
+            Thread host = getThreadAccess().getHost(guest);
             if (host != initiating && !host.isDaemon()) {
                 if (host.isAlive()) {
                     return true;
@@ -213,7 +212,6 @@ class EspressoShutdownHandler implements ContextAccess {
         getVM().getJvmti().postVmDeath();
 
         getContext().prepareDispose();
-        getContext().invalidateNoThreadStop("Killing the VM");
         Thread initiatingThread = Thread.currentThread();
 
         getContext().getLogger().finer("Teardown: Phase 0: wait");
@@ -248,7 +246,7 @@ class EspressoShutdownHandler implements ContextAccess {
         }
 
         try {
-            referenceDrainer.joinReferenceDrain();
+            referenceDrainer.shutdownAndWaitReferenceDrain();
         } catch (InterruptedException e) {
             // ignore
         }
@@ -258,16 +256,16 @@ class EspressoShutdownHandler implements ContextAccess {
 
     /**
      * Triggers soft interruption of active threads. This sends an interrupt signal to all leftover
-     * threads, gving them a chance to gracefully exit.
+     * threads, giving them a chance to gracefully exit.
      */
     private void teardownPhase1(Thread initiatingThread) {
         for (StaticObject guest : threadManager.activeThreads()) {
-            Thread t = Target_java_lang_Thread.getHostFromGuestThread(guest);
+            Thread t = getThreadAccess().getHost(guest);
             if (t.isAlive() && t != initiatingThread) {
                 if (t.isDaemon()) {
-                    Target_java_lang_Thread.killThread(guest);
+                    context.getThreadAccess().stop(guest, null);
                 }
-                Target_java_lang_Thread.interrupt0(guest);
+                context.getThreadAccess().callInterrupt(guest);
             }
         }
     }
@@ -278,10 +276,10 @@ class EspressoShutdownHandler implements ContextAccess {
      */
     private void teardownPhase2(Thread initiatingThread) {
         for (StaticObject guest : threadManager.activeThreads()) {
-            Thread t = Target_java_lang_Thread.getHostFromGuestThread(guest);
+            Thread t = getThreadAccess().getHost(guest);
             if (t.isAlive() && t != initiatingThread) {
-                Target_java_lang_Thread.killThread(guest);
-                Target_java_lang_Thread.interrupt0(guest);
+                context.getThreadAccess().stop(guest, null);
+                context.getThreadAccess().callInterrupt(guest);
             }
         }
     }
@@ -293,15 +291,15 @@ class EspressoShutdownHandler implements ContextAccess {
      */
     private void teardownPhase3(Thread initiatingThread) {
         for (StaticObject guest : threadManager.activeThreads()) {
-            Thread t = Target_java_lang_Thread.getHostFromGuestThread(guest);
+            Thread t = getThreadAccess().getHost(guest);
             if (t.isAlive() && t != initiatingThread) {
                 /*
                  * Currently, threads in native can not be killed in Espresso. This translates into
                  * a polyglot-side java.lang.IllegalStateException: The language did not complete
                  * all polyglot threads but should have.
                  */
-                Target_java_lang_Thread.forceKillThread(guest);
-                Target_java_lang_Thread.interrupt0(guest);
+                context.getThreadAccess().kill(guest);
+                context.getThreadAccess().callInterrupt(guest);
             }
         }
     }
@@ -311,7 +309,7 @@ class EspressoShutdownHandler implements ContextAccess {
      */
     private void teardownPhase4(Thread initiatingThread) {
         for (StaticObject guest : threadManager.activeThreads()) {
-            Thread t = Target_java_lang_Thread.getHostFromGuestThread(guest);
+            Thread t = getThreadAccess().getHost(guest);
             if (t.isAlive() && t != initiatingThread) {
                 // TODO(garcia): Tell truffle to forget about this thread
                 // Or
@@ -334,8 +332,8 @@ class EspressoShutdownHandler implements ContextAccess {
                 return false;
             }
             for (StaticObject guest : threadManager.activeThreads()) {
-                Thread t = Target_java_lang_Thread.getHostFromGuestThread(guest);
-                if (t != initiatingThread) {
+                Thread t = getThreadAccess().getHost(guest);
+                if (t != initiatingThread && t != referenceDrainer.drainHostThread() /*- drain thread gets a custom shutdown */) {
                     if (t.isAlive()) {
                         continue spinLoop;
                     }

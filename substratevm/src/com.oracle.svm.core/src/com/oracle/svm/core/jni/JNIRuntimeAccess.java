@@ -24,14 +24,13 @@
  */
 package com.oracle.svm.core.jni;
 
-// Checkstyle: allow reflection
-
 import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
+import org.graalvm.nativeimage.impl.ConfigurationCondition;
 import org.graalvm.nativeimage.impl.ReflectionRegistry;
 
 import com.oracle.svm.core.SubstrateOptions;
@@ -48,11 +47,11 @@ public final class JNIRuntimeAccess {
     }
 
     public static void register(Class<?>... classes) {
-        getSupport().register(classes);
+        getSupport().register(ConfigurationCondition.alwaysTrue(), classes);
     }
 
     public static void register(Executable... methods) {
-        getSupport().register(methods);
+        getSupport().register(ConfigurationCondition.alwaysTrue(), false, methods);
     }
 
     public static void register(Field... fields) {
@@ -60,7 +59,7 @@ public final class JNIRuntimeAccess {
     }
 
     public static void register(boolean finalIsWritable, Field... fields) {
-        getSupport().register(finalIsWritable, false, fields);
+        getSupport().register(ConfigurationCondition.alwaysTrue(), finalIsWritable, fields);
     }
 
     private static JNIRuntimeAccessibilitySupport getSupport() {

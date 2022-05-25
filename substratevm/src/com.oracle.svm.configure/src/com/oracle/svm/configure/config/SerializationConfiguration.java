@@ -26,42 +26,164 @@
 package com.oracle.svm.configure.config;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.oracle.svm.configure.json.JsonPrintable;
-import com.oracle.svm.configure.json.JsonWriter;
-import com.oracle.svm.core.SubstrateUtil;
+import com.oracle.svm.core.configure.ConfigurationParser;
 import com.oracle.svm.core.configure.SerializationConfigurationParser;
+import org.graalvm.compiler.java.LambdaUtils;
+import org.graalvm.nativeimage.impl.ConfigurationCondition;
+import org.graalvm.nativeimage.impl.RuntimeSerializationSupport;
 
-public class SerializationConfiguration implements JsonPrintable {
+import com.oracle.svm.configure.ConfigurationBase;
+import com.oracle.svm.configure.json.JsonWriter;
 
-    private static final String KEY_SEPARATOR = "|";
+public final class SerializationConfiguration extends ConfigurationBase<SerializationConfiguration, SerializationConfiguration.Predicate>
+                implements RuntimeSerializationSupport {
 
-    private final Set<String> serializations = ConcurrentHashMap.newKeySet();
+    private final Set<SerializationConfigurationType> serializations = ConcurrentHashMap.newKeySet();
+    private final Set<SerializationConfigurationLambdaCapturingType> lambdaSerializationCapturingTypes = ConcurrentHashMap.newKeySet();
 
-    public void add(String serializationTargetClass, String customTargetConstructorClass) {
-        serializations.add(serializationTargetClass + (customTargetConstructorClass != null ? KEY_SEPARATOR + customTargetConstructorClass : ""));
+    public SerializationConfiguration() {
+    }
+
+    public SerializationConfiguration(SerializationConfiguration other) {
+        serializations.addAll(other.serializations);
+        lambdaSerializationCapturingTypes.addAll(other.lambdaSerializationCapturingTypes);
+    }
+
+    @Override
+    public SerializationConfiguration copy() {
+        return new SerializationConfiguration(this);
+    }
+
+    @Override
+    protected void merge(SerializationConfiguration other) {
+        serializations.addAll(other.serializations);
+        lambdaSerializationCapturingTypes.addAll(other.lambdaSerializationCapturingTypes);
+    }
+
+    @Override
+    public void subtract(SerializationConfiguration other) {
+        serializations.removeAll(other.serializations);
+        lambdaSerializationCapturingTypes.removeAll(other.lambdaSerializationCapturingTypes);
+    }
+
+    @Override
+    protected void intersect(SerializationConfiguration other) {
+        serializations.retainAll(other.serializations);
+        lambdaSerializationCapturingTypes.retainAll(other.lambdaSerializationCapturingTypes);
+    }
+
+    @Override
+    protected void removeIf(Predicate predicate) {
+        serializations.removeIf(predicate::testSerializationType);
+        lambdaSerializationCapturingTypes.removeIf(predicate::testLambdaSerializationType);
+    }
+
+    @Override
+    public void mergeConditional(ConfigurationCondition condition, SerializationConfiguration other) {
+        for (SerializationConfigurationType type : other.serializations) {
+            serializations.add(new SerializationConfigurationType(condition, type.getQualifiedJavaName(), type.getQualifiedCustomTargetConstructorJavaName()));
+        }
+    }
+
+    public boolean contains(ConfigurationCondition condition, String serializationTargetClass, String customTargetConstructorClass) {
+        return serializations.contains(createConfigurationType(condition, serializationTargetClass, customTargetConstructorClass)) ||
+                        lambdaSerializationCapturingTypes.contains(createLambdaCapturingClassConfigurationType(condition, serializationTargetClass));
     }
 
     @Override
     public void printJson(JsonWriter writer) throws IOException {
-        writer.append('[').indent();
+        writer.append('{').indent().newline();
+        List<SerializationConfigurationType> listOfCapturedClasses = new ArrayList<>(serializations);
+        Collections.sort(listOfCapturedClasses);
+        printSerializationClasses(writer, "types", listOfCapturedClasses);
+        writer.append(",").newline();
+        List<SerializationConfigurationLambdaCapturingType> listOfCapturingClasses = new ArrayList<>(lambdaSerializationCapturingTypes);
+        listOfCapturingClasses.sort(new SerializationConfigurationLambdaCapturingType.SerializationConfigurationLambdaCapturingTypesComparator());
+        printSerializationClasses(writer, "lambdaCapturingTypes", listOfCapturingClasses);
+        writer.unindent().newline();
+        writer.append('}');
+    }
+
+    @Override
+    public ConfigurationParser createParser() {
+        return new SerializationConfigurationParser(this, true);
+    }
+
+    private static void printSerializationClasses(JsonWriter writer, String types, List<? extends JsonPrintable> serializationConfigurationTypes) throws IOException {
+        writer.quote(types).append(":");
+        writer.append('[');
+        writer.indent();
+
+        printSerializationTypes(serializationConfigurationTypes, writer);
+
+        writer.unindent().newline();
+        writer.append("]");
+    }
+
+    private static void printSerializationTypes(List<? extends JsonPrintable> serializationConfigurationTypes, JsonWriter writer) throws IOException {
         String prefix = "";
-        for (String entry : serializations) {
-            writer.append(prefix);
-            writer.newline().append('{').newline();
-            String[] serializationKeyValues = SubstrateUtil.split(entry, KEY_SEPARATOR, 2);
-            String className = serializationKeyValues[0];
-            writer.quote(SerializationConfigurationParser.NAME_KEY).append(":").quote(className);
-            if (serializationKeyValues.length > 1) {
-                writer.append(",").newline();
-                writer.quote(SerializationConfigurationParser.CUSTOM_TARGET_CONSTRUCTOR_CLASS_KEY).append(":").quote(serializationKeyValues[1]);
-            }
-            writer.newline().append('}');
+
+        for (JsonPrintable type : serializationConfigurationTypes) {
+            writer.append(prefix).newline();
+            type.printJson(writer);
             prefix = ",";
         }
-        writer.unindent().newline();
-        writer.append(']').newline();
+    }
+
+    @Override
+    public void registerIncludingAssociatedClasses(ConfigurationCondition condition, Class<?> clazz) {
+        register(condition, clazz);
+    }
+
+    @Override
+    public void register(ConfigurationCondition condition, Class<?>... classes) {
+        for (Class<?> clazz : classes) {
+            registerWithTargetConstructorClass(condition, clazz, null);
+        }
+    }
+
+    @Override
+    public void registerWithTargetConstructorClass(ConfigurationCondition condition, Class<?> clazz, Class<?> customTargetConstructorClazz) {
+        registerWithTargetConstructorClass(condition, clazz.getName(), customTargetConstructorClazz == null ? null : customTargetConstructorClazz.getName());
+    }
+
+    @Override
+    public void registerWithTargetConstructorClass(ConfigurationCondition condition, String className, String customTargetConstructorClassName) {
+        serializations.add(createConfigurationType(condition, className, customTargetConstructorClassName));
+    }
+
+    @Override
+    public void registerLambdaCapturingClass(ConfigurationCondition condition, String lambdaCapturingClassName) {
+        lambdaSerializationCapturingTypes.add(createLambdaCapturingClassConfigurationType(condition, lambdaCapturingClassName.split(LambdaUtils.LAMBDA_SPLIT_PATTERN)[0]));
+    }
+
+    @Override
+    public boolean isEmpty() {
+        return serializations.isEmpty() && lambdaSerializationCapturingTypes.isEmpty();
+    }
+
+    private static SerializationConfigurationType createConfigurationType(ConfigurationCondition condition, String className, String customTargetConstructorClassName) {
+        String convertedClassName = SignatureUtil.toInternalClassName(className);
+        String convertedCustomTargetConstructorClassName = customTargetConstructorClassName == null ? null : SignatureUtil.toInternalClassName(customTargetConstructorClassName);
+        return new SerializationConfigurationType(condition, convertedClassName, convertedCustomTargetConstructorClassName);
+    }
+
+    private static SerializationConfigurationLambdaCapturingType createLambdaCapturingClassConfigurationType(ConfigurationCondition condition, String className) {
+        String convertedClassName = SignatureUtil.toInternalClassName(className);
+        return new SerializationConfigurationLambdaCapturingType(condition, convertedClassName);
+    }
+
+    public interface Predicate {
+
+        boolean testSerializationType(SerializationConfigurationType type);
+
+        boolean testLambdaSerializationType(SerializationConfigurationLambdaCapturingType type);
     }
 }

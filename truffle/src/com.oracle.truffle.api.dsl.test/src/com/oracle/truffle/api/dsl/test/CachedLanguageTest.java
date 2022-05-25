@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -50,13 +50,13 @@ import com.oracle.truffle.api.TruffleLanguage.Env;
 import com.oracle.truffle.api.TruffleLanguage.LanguageReference;
 import com.oracle.truffle.api.TruffleLanguage.Registration;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.CachedLanguage;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Introspectable;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.dsl.test.CachedLanguageTestFactory.CachedWithFallbackNodeGen;
 import com.oracle.truffle.api.dsl.test.CachedLanguageTestFactory.Valid1NodeGen;
+import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
 import com.oracle.truffle.api.library.GenerateLibrary;
@@ -64,8 +64,12 @@ import com.oracle.truffle.api.library.Library;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.test.AbstractLibraryTest;
 
-@SuppressWarnings("unused")
+@SuppressWarnings({"unused", "deprecation"})
 public class CachedLanguageTest extends AbstractLibraryTest {
+
+    public CachedLanguageTest() {
+        needsLanguageEnv = true;
+    }
 
     @Test
     public void testCachedLanguage() {
@@ -98,19 +102,19 @@ public class CachedLanguageTest extends AbstractLibraryTest {
 
         @Specialization
         static String s0(int value,
-                        @CachedLanguage CachedLanguageTestLanguage language, //
-                        @CachedLanguage LanguageReference<CachedLanguageTestLanguage> languageSupplier) {
+                        @com.oracle.truffle.api.dsl.CachedLanguage CachedLanguageTestLanguage language, //
+                        @com.oracle.truffle.api.dsl.CachedLanguage LanguageReference<CachedLanguageTestLanguage> languageSupplier) {
             assertSame(CachedLanguageTestLanguage.getCurrentLanguage(), language);
-            assertSame(CachedLanguageTestLanguage.getCurrentLanguage(), languageSupplier.get());
+            assertSame(CachedLanguageTestLanguage.getCurrentLanguage(), languageSupplier.get(null));
             return "s0";
         }
 
         @Specialization
         static String s1(double value,
-                        @CachedLanguage CachedLanguageTestLanguage language, //
-                        @CachedLanguage LanguageReference<CachedLanguageTestLanguage> languageSupplier) {
+                        @com.oracle.truffle.api.dsl.CachedLanguage CachedLanguageTestLanguage language, //
+                        @com.oracle.truffle.api.dsl.CachedLanguage LanguageReference<CachedLanguageTestLanguage> languageSupplier) {
             assertSame(CachedLanguageTestLanguage.getCurrentLanguage(), language);
-            assertSame(CachedLanguageTestLanguage.getCurrentLanguage(), languageSupplier.get());
+            assertSame(CachedLanguageTestLanguage.getCurrentLanguage(), languageSupplier.get(null));
             return "s1";
         }
     }
@@ -164,7 +168,7 @@ public class CachedLanguageTest extends AbstractLibraryTest {
 
         @Specialization(guards = {"language == cachedLanguage", "isGuard(o)"}, limit = "1")
         String s0(String o,
-                        @CachedLanguage CachedLanguageTestLanguage language,
+                        @com.oracle.truffle.api.dsl.CachedLanguage CachedLanguageTestLanguage language,
                         @Cached("language") CachedLanguageTestLanguage cachedLanguage) {
             return "s0";
         }
@@ -193,7 +197,7 @@ public class CachedLanguageTest extends AbstractLibraryTest {
 
         @Specialization
         static String s0(Object value,
-                        @ExpectError("Invalid @CachedLanguage specification. The parameter type must be a subtype of TruffleLanguage or of type LanguageReference<TruffleLanguage>.") @CachedLanguage Object language) {
+                        @ExpectError("Invalid @CachedLanguage specification. The parameter type must be a subtype of TruffleLanguage or of type LanguageReference<TruffleLanguage>.") @com.oracle.truffle.api.dsl.CachedLanguage Object language) {
             throw new AssertionError();
         }
     }
@@ -205,7 +209,7 @@ public class CachedLanguageTest extends AbstractLibraryTest {
         @Specialization
         static String s0(Object value,
                         @ExpectError("Invalid @CachedLanguage specification. The type 'TruffleLanguage' is not a valid language type. Valid language types must be annotated with @Registration.") //
-                        @CachedLanguage TruffleLanguage<?> language) {
+                        @com.oracle.truffle.api.dsl.CachedLanguage TruffleLanguage<?> language) {
             throw new AssertionError();
         }
     }
@@ -217,7 +221,7 @@ public class CachedLanguageTest extends AbstractLibraryTest {
         @Specialization
         static String s0(Object value,
                         @ExpectError("Invalid @CachedLanguage specification. The type 'InvalidLanguage' is not a valid language type. Valid language types must be annotated with @Registration.") //
-                        @CachedLanguage InvalidLanguage language) {
+                        @com.oracle.truffle.api.dsl.CachedLanguage InvalidLanguage language) {
             throw new AssertionError();
         }
     }
@@ -229,7 +233,7 @@ public class CachedLanguageTest extends AbstractLibraryTest {
         @Specialization
         static String s0(Object value,
                         @ExpectError("Invalid @CachedLanguage specification. The first type argument of the LanguageReference must be a subtype of 'TruffleLanguage'.")//
-                        @CachedLanguage LanguageReference<? extends Object> languageSupplier) {
+                        @com.oracle.truffle.api.dsl.CachedLanguage LanguageReference<? extends Object> languageSupplier) {
             throw new AssertionError();
         }
     }
@@ -241,7 +245,7 @@ public class CachedLanguageTest extends AbstractLibraryTest {
         @Specialization
         static String s0(Object value,
                         @ExpectError("Invalid @CachedLanguage specification. The type 'TruffleLanguage' is not a valid language type. Valid language types must be annotated with @Registration.")//
-                        @CachedLanguage LanguageReference<TruffleLanguage<?>> languageSupplier) {
+                        @com.oracle.truffle.api.dsl.CachedLanguage LanguageReference<TruffleLanguage<?>> languageSupplier) {
             throw new AssertionError();
         }
     }
@@ -253,7 +257,7 @@ public class CachedLanguageTest extends AbstractLibraryTest {
         @Specialization
         static String s0(Object value,
                         @ExpectError("Invalid @CachedLanguage specification. The type 'InvalidLanguage' is not a valid language type. Valid language types must be annotated with @Registration.")//
-                        @CachedLanguage LanguageReference<InvalidLanguage> languageSupplier) {
+                        @com.oracle.truffle.api.dsl.CachedLanguage LanguageReference<InvalidLanguage> languageSupplier) {
             throw new AssertionError();
         }
     }
@@ -271,13 +275,14 @@ public class CachedLanguageTest extends AbstractLibraryTest {
     static class CachedLanguageLibraryReceiver {
 
         @ExportMessage
-        final CachedLanguageTestLanguage m0(@CachedLanguage CachedLanguageTestLanguage env) {
+        final CachedLanguageTestLanguage m0(@com.oracle.truffle.api.dsl.CachedLanguage CachedLanguageTestLanguage env) {
             return env;
         }
 
         @ExportMessage
-        final CachedLanguageTestLanguage m1(@CachedLanguage LanguageReference<CachedLanguageTestLanguage> env) {
-            return env.get();
+        final CachedLanguageTestLanguage m1(@com.oracle.truffle.api.dsl.CachedLanguage LanguageReference<CachedLanguageTestLanguage> env,
+                        @CachedLibrary("this") CachedLanguageTestLibrary lib) {
+            return env.get(lib);
         }
     }
 

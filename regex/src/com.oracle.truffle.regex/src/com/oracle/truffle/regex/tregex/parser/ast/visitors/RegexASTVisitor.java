@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -49,6 +49,7 @@ import com.oracle.truffle.regex.tregex.parser.ast.LookBehindAssertion;
 import com.oracle.truffle.regex.tregex.parser.ast.PositionAssertion;
 import com.oracle.truffle.regex.tregex.parser.ast.RegexASTNode;
 import com.oracle.truffle.regex.tregex.parser.ast.Sequence;
+import com.oracle.truffle.regex.tregex.parser.ast.SubexpressionCall;
 
 public abstract class RegexASTVisitor {
 
@@ -61,6 +62,8 @@ public abstract class RegexASTVisitor {
     protected abstract void visit(Sequence sequence);
 
     protected abstract void leave(Sequence sequence);
+
+    protected abstract void visit(SubexpressionCall subexpressionCall);
 
     protected abstract void visit(PositionAssertion assertion);
 
@@ -89,6 +92,8 @@ public abstract class RegexASTVisitor {
             visit((CharacterClass) cur);
         } else if (cur instanceof BackReference) {
             visit((BackReference) cur);
+        } else if (cur instanceof SubexpressionCall) {
+            visit((SubexpressionCall) cur);
         } else {
             throw CompilerDirectives.shouldNotReachHere();
         }

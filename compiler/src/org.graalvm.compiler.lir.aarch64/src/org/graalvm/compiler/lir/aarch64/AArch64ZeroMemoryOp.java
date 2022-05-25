@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2022, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2019, Arm Limited and affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -100,7 +100,7 @@ public final class AArch64ZeroMemoryOp extends AArch64LIRInstruction {
                 Label baseAlignedTo8Bytes = new Label();
 
                 // Jump to per-byte zeroing loop if the zeroing size is less than 8
-                masm.cmp(64, size, 8);
+                masm.compare(64, size, 8);
                 masm.branchConditionally(ConditionFlag.LT, tail);
 
                 // Make base 8-byte aligned
@@ -187,7 +187,7 @@ public final class AArch64ZeroMemoryOp extends AArch64LIRInstruction {
 
                 if (!isAligned) {
                     // After aligning base, we may have size less than 8. Need to check again.
-                    masm.cmp(64, size, 8);
+                    masm.compare(64, size, 8);
                     masm.branchConditionally(ConditionFlag.LT, tail);
                 }
 

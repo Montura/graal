@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2021, Oracle and/or its affiliates.
+ * Copyright (c) 2019, 2022, Oracle and/or its affiliates.
  *
  * All rights reserved.
  *
@@ -29,11 +29,8 @@
  */
 package com.oracle.truffle.llvm.runtime.nodes.intrinsics.multithreading;
 
-import com.oracle.truffle.api.CompilerDirectives;
-import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
-import com.oracle.truffle.api.TruffleLanguage.ContextReference;
 import com.oracle.truffle.api.frame.FrameDescriptor;
-import com.oracle.truffle.api.frame.FrameSlot;
+import com.oracle.truffle.api.frame.FrameSlotKind;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.llvm.runtime.CommonNodeFactory;
 import com.oracle.truffle.llvm.runtime.LLVMContext;
@@ -41,6 +38,7 @@ import com.oracle.truffle.llvm.runtime.LLVMLanguage;
 import com.oracle.truffle.llvm.runtime.NodeFactory;
 import com.oracle.truffle.llvm.runtime.nodes.api.LLVMExpressionNode;
 import com.oracle.truffle.llvm.runtime.nodes.func.LLVMRootNode;
+import com.oracle.truffle.llvm.runtime.nodes.vars.LLVMReadNode.LLVMObjectReadNode;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMNativePointer;
 import com.oracle.truffle.llvm.runtime.pointer.LLVMPointer;
 import com.oracle.truffle.llvm.runtime.pthread.LLVMPThreadContext;
@@ -52,16 +50,14 @@ public final class LLVMPThreadStart {
 
     static final class LLVMPThreadRunnable implements Runnable {
 
-        private final boolean isThread;
         private final Object startRoutine;
         private final Object arg;
         private final LLVMContext context;
 
-        LLVMPThreadRunnable(Object startRoutine, Object arg, LLVMContext context, boolean isThread) {
+        LLVMPThreadRunnable(Object startRoutine, Object arg, LLVMContext context) {
             this.startRoutine = startRoutine;
             this.arg = arg;
             this.context = context;
-            this.isThread = isThread;
         }
 
         @Override
@@ -85,19 +81,18 @@ public final class LLVMPThreadStart {
                 pThreadContext.setThreadReturnValue(Thread.currentThread().getId(), LLVMNativePointer.createNull());
                 throw t;
             } finally {
-                // call destructors from key create
-                if (this.isThread) {
+                if (!this.context.getEnv().getContext().isClosed()) {
+                    // call destructors from key create
                     for (int key = 1; key <= pThreadContext.getNumberOfPthreadKeys(); key++) {
                         final LLVMPointer destructor = pThreadContext.getDestructor(key);
                         if (destructor != null && !destructor.isNull()) {
                             final LLVMPointer keyMapping = pThreadContext.getAndRemoveSpecificUnlessNull(key);
                             if (keyMapping != null) {
                                 assert !keyMapping.isNull();
-                                new LLVMPThreadRunnable(destructor, keyMapping, this.context, false).run();
+                                pThreadContext.getPthreadCallTarget().call(destructor, keyMapping);
                             }
                         }
                     }
-                    pThreadContext.clearThreadId();
                 }
             }
         }
@@ -107,40 +102,40 @@ public final class LLVMPThreadStart {
 
         @Child private LLVMExpressionNode callNode;
 
-        private final FrameSlot functionSlot;
-        private final FrameSlot argSlot;
+        private final int functionSlot;
+        private final int argSlot;
 
-        @CompilationFinal private ContextReference<LLVMContext> ctxRef;
-
-        private LLVMPThreadFunctionRootNode(LLVMLanguage language, FrameDescriptor frameDescriptor, FrameSlot functionSlot, FrameSlot argSlot, NodeFactory nodeFactory) {
-            super(language, frameDescriptor, nodeFactory.createStackAccess(frameDescriptor));
+        private LLVMPThreadFunctionRootNode(LLVMLanguage language, FrameDescriptor frameDescriptor, int functionSlot, int argSlot, NodeFactory nodeFactory) {
+            super(language, frameDescriptor, nodeFactory.createStackAccess());
             this.functionSlot = functionSlot;
             this.argSlot = argSlot;
 
             this.callNode = CommonNodeFactory.createFunctionCall(
-                            CommonNodeFactory.createFrameRead(PointerType.VOID, functionSlot),
+                            LLVMObjectReadNode.create(functionSlot),
                             new LLVMExpressionNode[]{
                                             nodeFactory.createGetStackFromFrame(),
-                                            CommonNodeFactory.createFrameRead(PointerType.VOID, argSlot)
+                                            LLVMObjectReadNode.create(argSlot)
                             },
                             FunctionType.create(PointerType.VOID, PointerType.VOID, false));
         }
 
         public static LLVMPThreadFunctionRootNode create(LLVMLanguage language, NodeFactory nodeFactory) {
-            FrameDescriptor descriptor = new FrameDescriptor();
-            FrameSlot functionSlot = descriptor.addFrameSlot("function");
-            FrameSlot argSlot = descriptor.addFrameSlot("arg");
+            FrameDescriptor.Builder builder = FrameDescriptor.newBuilder();
+            nodeFactory.addStackSlots(builder);
+            int functionSlot = builder.addSlot(FrameSlotKind.Object, null, null);
+            int argSlot = builder.addSlot(FrameSlotKind.Object, null, null);
+            FrameDescriptor descriptor = builder.build();
             return new LLVMPThreadFunctionRootNode(language, descriptor, functionSlot, argSlot, nodeFactory);
         }
 
         @Override
-        public Object execute(VirtualFrame frame) {
-            if (ctxRef == null) {
-                CompilerDirectives.transferToInterpreterAndInvalidate();
-                ctxRef = lookupContextReference(LLVMLanguage.class);
-            }
+        public boolean isInternal() {
+            return false;
+        }
 
-            stackAccess.executeEnter(frame, ctxRef.get().getThreadingStack().getStack());
+        @Override
+        public Object execute(VirtualFrame frame) {
+            stackAccess.executeEnter(frame, getContext().getThreadingStack().getStack());
             try {
 
                 // copy arguments to frame

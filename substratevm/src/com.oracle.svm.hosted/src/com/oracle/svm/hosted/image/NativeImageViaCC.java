@@ -174,6 +174,9 @@ public abstract class NativeImageViaCC extends NativeImage {
     class DarwinCCLinkerInvocation extends CCLinkerInvocation {
 
         DarwinCCLinkerInvocation() {
+            // Workaround building images with older Xcode with new libraries
+            additionalPreOptions.add("-Wl,-U,___darwin_check_fd_set_overflow");
+
             if (!SubstrateOptions.useLLVMBackend()) {
                 additionalPreOptions.add("-Wl,-no_compact_unwind");
             }
@@ -280,6 +283,9 @@ public abstract class NativeImageViaCC extends NativeImage {
             cmd.add("/INCREMENTAL:NO");
             cmd.add("/NODEFAULTLIB:LIBCMT");
 
+            /* Use page size alignment to support memory mapping of the image heap. */
+            cmd.add("/FILEALIGN:4096");
+
             /* Put .lib and .exp files in a temp dir as we don't usually need them. */
             cmd.add("/IMPLIB:" + getTempDirectory().resolve(imageName + ".lib"));
 
@@ -346,10 +352,6 @@ public abstract class NativeImageViaCC extends NativeImage {
                 break;
         }
 
-        if (SubstrateOptions.AdditionalLinkerOptions.hasBeenSet()) {
-            inv.additionalPreOptions.add(SubstrateOptions.AdditionalLinkerOptions.getValue());
-        }
-
         Path outputFile = outputDirectory.resolve(imageName + imageKind.getFilenameSuffix());
         UserError.guarantee(!Files.isDirectory(outputFile), "Cannot write image to %s. Path exists as directory. (Use -H:Name=<image name>)", outputFile);
         inv.setOutputFile(outputFile);
@@ -397,9 +399,9 @@ public abstract class NativeImageViaCC extends NativeImage {
         Pattern p = Pattern.compile(".*cannot find -l([^\\s]+)\\s.*", Pattern.DOTALL);
         Matcher m = p.matcher(linkerOutput);
         if (m.matches()) {
-            OS os = OS.getCurrent();
-            String libPrefix = os == OS.WINDOWS ? "" : "lib";
-            String libSuffix = os == OS.WINDOWS ? ".lib" : ".a";
+            boolean targetWindows = Platform.includedIn(Platform.WINDOWS.class);
+            String libPrefix = targetWindows ? "" : "lib";
+            String libSuffix = targetWindows ? ".lib" : ".a";
             potentialCauses.add(String.format("It appears as though %s%s%s is missing. Please install it.", libPrefix, m.group(1), libSuffix));
         }
         return potentialCauses;
@@ -453,7 +455,7 @@ public abstract class NativeImageViaCC extends NativeImage {
                 Path imagePath = inv.getOutputFile();
                 BuildArtifacts.singleton().add(imageKind.isExecutable ? ArtifactType.EXECUTABLE : ArtifactType.SHARED_LIB, imagePath);
 
-                if (OS.getCurrent() == OS.WINDOWS && !imageKind.isExecutable) {
+                if (Platform.includedIn(Platform.WINDOWS.class) && !imageKind.isExecutable) {
                     /* Provide an import library for the built shared library. */
                     String importLib = imageName + ".lib";
                     Path importLibPath = imagePath.resolveSibling(importLib);
@@ -463,7 +465,7 @@ public abstract class NativeImageViaCC extends NativeImage {
 
                 if (SubstrateOptions.GenerateDebugInfo.getValue() > 0) {
                     BuildArtifacts.singleton().add(ArtifactType.DEBUG_INFO, SubstrateOptions.getDebugInfoSourceCacheRoot());
-                    if (OS.getCurrent() == OS.WINDOWS) {
+                    if (Platform.includedIn(Platform.WINDOWS.class)) {
                         BuildArtifacts.singleton().add(ArtifactType.DEBUG_INFO, imagePath.resolveSibling(imageName + ".pdb"));
                     } else {
                         BuildArtifacts.singleton().add(ArtifactType.DEBUG_INFO, imagePath);

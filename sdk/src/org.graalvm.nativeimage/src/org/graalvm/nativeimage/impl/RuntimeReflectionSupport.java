@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,23 +40,44 @@
  */
 package org.graalvm.nativeimage.impl;
 
+import java.lang.reflect.AccessibleObject;
+import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
+import java.util.Map;
+import java.util.Set;
 
 public interface RuntimeReflectionSupport extends ReflectionRegistry {
-    // specific to java.lang.reflect reflection
+    Map<Class<?>, Set<Class<?>>> getReflectionInnerClasses();
 
-    /**
-     * Returns true if the final field is explicitly made writable using the reflection
-     * configuration, i.e., if the field needs to be treated like a non-final field.
-     * 
-     * After this method was called for a field and returned false, the field must not be added
-     * using new reflection configuration. So this method should be called as late as possible.
-     */
-    boolean inspectFinalFieldWritableForAnalysis(Field field);
+    Set<Field> getReflectionFields();
 
-    /**
-     * Ensures that the field is going to be made writable once some other mechanism registers the
-     * field for reflection.
+    Set<Executable> getReflectionExecutables();
+
+    Object getAccessor(Executable method);
+
+    /*
+     * Returns the methods and fields that shadow a superclass element registered for reflection, to
+     * be excluded from reflection queries.
      */
-    void preregisterAsWritableForAnalysis(Field field);
+    Set<?> getHidingReflectionFields();
+
+    Set<?> getHidingReflectionMethods();
+
+    Object[] getRecordComponents(Class<?> type);
+
+    void registerHeapDynamicHub(Object hub);
+
+    Set<?> getHeapDynamicHubs();
+
+    void registerHeapReflectionObject(AccessibleObject object);
+
+    Set<AccessibleObject> getHeapReflectionObjects();
+
+    int getReflectionClassesCount();
+
+    int getReflectionMethodsCount();
+
+    int getReflectionFieldsCount();
+
+    boolean requiresProcessing();
 }

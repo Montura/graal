@@ -45,7 +45,7 @@ import sys
 import zipfile
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from collections import OrderedDict
-from os.path import exists
+from os.path import exists, isdir, join
 
 import mx
 import mx_benchmark
@@ -90,7 +90,11 @@ class JMHRunnerTruffleBenchmarkSuite(mx_benchmark.JMHRunnerBenchmarkSuite):
         return "truffle"
 
     def extraVmArgs(self):
-        return ['-XX:-UseJVMCIClassLoader'] + super(JMHRunnerTruffleBenchmarkSuite, self).extraVmArgs()
+        extraVmArgs = super(JMHRunnerTruffleBenchmarkSuite, self).extraVmArgs()
+        extraVmArgs.extend(_open_module_exports_args())
+        # com.oracle.truffle.api.benchmark.InterpreterCallBenchmark$BenchmarkState needs DefaultTruffleRuntime
+        extraVmArgs.append('--add-exports=org.graalvm.truffle/com.oracle.truffle.api.impl=ALL-UNNAMED')
+        return extraVmArgs
 
 mx_benchmark.add_bm_suite(JMHRunnerTruffleBenchmarkSuite())
 #mx_benchmark.add_java_vm(mx_benchmark.DefaultJavaVm("server", "default"), priority=3)
@@ -177,31 +181,51 @@ def _path_args(depNames=None):
             return ['--add-modules=' + ','.join([m.name for m in modules]), '--module-path=' + os.pathsep.join(modulepath), '-cp', os.pathsep.join(classpath)]
     return ['-cp', mx.classpath(depNames)]
 
+def _open_module_exports_args():
+    """
+    Gets the VM args for exporting all Truffle API packages on JDK9 or later.
+    """
+    assert mx.get_jdk().javaCompliance >= '1.9'
+    truffle_api_dist = mx.distribution('TRUFFLE_API')
+    truffle_api_module_name = truffle_api_dist.moduleInfo['name']
+    module_info_open_exports = getattr(truffle_api_dist, 'moduleInfo:open')['exports']
+    args = []
+    for export in module_info_open_exports:
+        if ' to ' in export: # Qualified exports
+            package, targets = export.split(' to ')
+            targets = targets.replace(' ', '')
+        else: # Unqualified exports
+            package = export
+            targets = 'ALL-UNNAMED'
+        args.append('--add-exports=' + truffle_api_module_name + '/' + package + '=' + targets)
+    return args
+
 def _unittest_config_participant(config):
     vmArgs, mainClass, mainClassArgs = config
-    jdk = mx.get_jdk(tag='default')
-    if jdk.javaCompliance > '1.8':
-        # This is required to access jdk.internal.module.Modules which
-        # in turn allows us to dynamically open fields/methods to reflection.
-        vmArgs = vmArgs + ['--add-exports=java.base/jdk.internal.module=ALL-UNNAMED']
+    # Disable DefaultRuntime warning
+    vmArgs = vmArgs + ['-Dpolyglot.engine.WarnInterpreterOnly=false']
 
-        # The arguments below are only actually needed if Truffle is deployed as a
-        # module. However, that's determined by the compiler suite which may not
-        # be present. In that case, adding these options results in annoying
-        # but harmless messages from the VM:
-        #
-        #  WARNING: Unknown module: org.graalvm.truffle specified to --add-opens
-        #
+    # This is required to access jdk.internal.module.Modules which
+    # in turn allows us to dynamically open fields/methods to reflection.
+    vmArgs = vmArgs + ['--add-exports=java.base/jdk.internal.module=ALL-UNNAMED']
 
-        # Needed for com.oracle.truffle.api.dsl.test.TestHelper#instrumentSlowPath
-        vmArgs = vmArgs + ['--add-opens=org.graalvm.truffle/com.oracle.truffle.api.nodes=ALL-UNNAMED']
+    # The arguments below are only actually needed if Truffle is deployed as a
+    # module. However, that's determined by the compiler suite which may not
+    # be present. In that case, adding these options results in annoying
+    # but harmless messages from the VM:
+    #
+    #  WARNING: Unknown module: org.graalvm.truffle specified to --add-opens
+    #
 
-        # This is required for the call to setAccessible in
-        # TruffleTCK.testValueWithSource to work.
-        vmArgs = vmArgs + ['--add-opens=org.graalvm.truffle/com.oracle.truffle.polyglot=ALL-UNNAMED', '--add-modules=ALL-MODULE-PATH']
+    # Needed for com.oracle.truffle.api.dsl.test.TestHelper#instrumentSlowPath
+    vmArgs = vmArgs + ['--add-opens=org.graalvm.truffle/com.oracle.truffle.api.nodes=ALL-UNNAMED']
 
-        # Needed for object model tests.
-        vmArgs = vmArgs + ['--add-opens=org.graalvm.truffle/com.oracle.truffle.object=ALL-UNNAMED']
+    # This is required for the call to setAccessible in
+    # TruffleTCK.testValueWithSource to work.
+    vmArgs = vmArgs + ['--add-opens=org.graalvm.truffle/com.oracle.truffle.polyglot=ALL-UNNAMED', '--add-modules=ALL-MODULE-PATH']
+
+    # Needed for object model tests.
+    vmArgs = vmArgs + ['--add-opens=org.graalvm.truffle/com.oracle.truffle.object=ALL-UNNAMED']
 
     config = (vmArgs, mainClass, mainClassArgs)
     if _shouldRunTCKParticipant:
@@ -227,10 +251,11 @@ def _truffle_gate_runner(args, tasks):
     with Task('Truffle Signature Tests', tasks) as t:
         if t: sigtest(['--check', 'binary'])
     with Task('Truffle UnitTests', tasks) as t:
-        if t: unittest(['--suite', 'truffle', '--enable-timing', '--verbose', '--fail-fast'])
-    with Task('Truffle DSL max state bit tests', tasks) as t:
-        if t:
-            _truffle_gate_state_bitwidth_tests()
+        if t: unittest(list(['--suite', 'truffle', '--enable-timing', '--verbose', '--fail-fast']))
+    if os.getenv('DISABLE_DSL_STATE_BITS_TESTS', 'false').lower() != 'true':
+        with Task('Truffle DSL max state bit tests', tasks) as t:
+            if t:
+                _truffle_gate_state_bitwidth_tests()
 
 # The Truffle DSL specialization state bit width computation is complicated and
 # rarely used as the default maximum bit width of 32 is rarely exceeded. Therefore
@@ -238,7 +263,7 @@ def _truffle_gate_runner(args, tasks):
 # force using multiple state fields for the tests. This makes sure the tests
 # do not break for rarely used combination of features and bit widths.
 def _truffle_gate_state_bitwidth_tests():
-    runs = [1, 2, 4, 8, 16, 32, 64]
+    runs = [1, 2, 4, 8, 16, 64]
     for run_bits in runs:
         build_args = ['-f', '-p', '--dependencies', 'TRUFFLE_TEST', '--force-javac',
                       '-A-Atruffle.dsl.StateBitWidth={0}'.format(run_bits)]
@@ -304,15 +329,20 @@ def _collect_class_path_entries_by_resource(requiredResources, entries_collector
     """
     def has_resource(dist):
         if dist.isJARDistribution() and exists(dist.path):
-            with zipfile.ZipFile(dist.path, "r") as zf:
+            if isdir(dist.path):
                 for requiredResource in requiredResources:
-                    try:
-                        zf.getinfo(requiredResource)
-                    except KeyError:
-                        pass
-                    else:
+                    if exists(join(dist.path, requiredResource)):
                         return True
-                return False
+            else:
+                with zipfile.ZipFile(dist.path, "r") as zf:
+                    for requiredResource in requiredResources:
+                        try:
+                            zf.getinfo(requiredResource)
+                        except KeyError:
+                            pass
+                        else:
+                            return True
+                    return False
         else:
             return False
     _collect_class_path_entries(has_resource, entries_collector, properties_collector)
@@ -410,11 +440,13 @@ class TruffleArchiveParticipant:
         self.services = services
         self.arc = arc
 
-    def __add__(self, arcname, contents): # pylint: disable=unexpected-special-method-signature
+    def __process__(self, arcname, contents_supplier, is_source):
+        if is_source:
+            return False
         m = TruffleArchiveParticipant.providersRE.match(arcname)
         if m:
             provider = m.group(2)
-            for service in _decode(contents).strip().split(os.linesep):
+            for service in _decode(contents_supplier()).strip().split(os.linesep):
                 assert service
                 version = m.group(1)
                 if version is None:
@@ -704,23 +736,30 @@ class LibffiBuilderProject(mx.AbstractNativeProject, mx_native.NativeDependency)
                                                   'include/ffitarget.h'],
                                                  mx.join(self.out_dir, 'libffi-build'),
                                                  mx.join(self.out_dir, 'libffi-3.3'))
+            configure_args = ['--disable-dependency-tracking',
+                              '--disable-shared',
+                              '--with-pic',
+                              ' CFLAGS="{}"'.format(' '.join(['-g', '-O3'] + (['-m64'] if mx.get_os() == 'solaris' else []))),
+                              'CPPFLAGS="-DNO_JAVA_RAW_API"',
+                             ]
+            if mx.get_os() == 'darwin' and mx.get_arch() == 'aarch64':
+                # configure wrongly autodetects as 'arm-apple-darwin20.0.0', see https://github.com/libffi/libffi/issues/571
+                # force it until it is fixed upstream, tracked in GR-35554
+                configure_args.append('--build=aarch64-apple-darwin20.0.0')
+
             self.delegate.buildEnv = dict(
                 SOURCES=mx.basename(self.delegate.dir),
                 OUTPUT=mx.basename(self.delegate.getOutput()),
-                CONFIGURE_ARGS=' '.join([
-                    '--disable-dependency-tracking',
-                    '--disable-shared',
-                    '--with-pic',
-                    'CFLAGS="{}"'.format(' '.join(
-                        ['-g', '-O3'] + (['-m64'] if mx.get_os() == 'solaris' else [])
-                    )),
-                    'CPPFLAGS="-DNO_JAVA_RAW_API"',
-                ])
+                CONFIGURE_ARGS=' '.join(configure_args)
             )
 
-        self.buildDependencies = self.delegate.buildDependencies
         self.include_dirs = self.delegate.include_dirs
         self.libs = self.delegate.libs
+
+    def resolveDeps(self):
+        super(LibffiBuilderProject, self).resolveDeps()
+        self.delegate.resolveDeps()
+        self.buildDependencies += self.delegate.buildDependencies
 
     @property
     def sources(self):
@@ -776,7 +815,7 @@ class LibffiBuildTask(mx.AbstractNativeBuildTask):
 
         mx.log('Applying patches...')
         git_apply = ['git', 'apply', '--whitespace=nowarn', '--unsafe-paths', '--directory',
-                     os.path.relpath(self.subject.delegate.dir, self.subject.suite.vc_dir)]
+                     os.path.realpath(self.subject.delegate.dir)]
         for patch in self.subject.patches:
             mx.run(git_apply + [patch], cwd=self.subject.suite.vc_dir)
 
@@ -828,9 +867,37 @@ mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmLanguage(
     license_files=[],
     third_party_license_files=[],
     dependencies=['Truffle'],
-    truffle_jars=['truffle:TRUFFLE_NFI', 'truffle:TRUFFLE_NFI_LIBFFI'],
+    truffle_jars=['truffle:TRUFFLE_NFI'],
     support_distributions=['truffle:TRUFFLE_NFI_GRAALVM_SUPPORT'],
     support_libraries_distributions=['truffle:TRUFFLE_NFI_NATIVE_GRAALVM_SUPPORT'],
+    installable=False,
+    stability="supported",
+))
+
+mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmLanguage(
+    suite=_suite,
+    name='Truffle NFI LIBFFI',
+    short_name='nfi-libffi',
+    dir_name='nfi-libffi',
+    license_files=[],
+    third_party_license_files=[],
+    dependencies=['Truffle', 'Truffle NFI'],
+    truffle_jars=['truffle:TRUFFLE_NFI_LIBFFI'],
+    support_distributions=['truffle:TRUFFLE_NFI_GRAALVM_SUPPORT'],
+    support_libraries_distributions=['truffle:TRUFFLE_NFI_NATIVE_GRAALVM_SUPPORT'],
+    installable=False,
+    stability="supported",
+))
+
+mx_sdk_vm.register_graalvm_component(mx_sdk_vm.GraalVmJreComponent(
+    suite=_suite,
+    name='ICU4J',
+    short_name='icu4j',
+    dir_name='truffle',
+    license_files=[],
+    third_party_license_files=[],
+    dependencies=['Truffle'],
+    jar_distributions=['truffle:ICU4J', 'truffle:ICU4J-CHARSET'],
     installable=False,
     stability="supported",
 ))

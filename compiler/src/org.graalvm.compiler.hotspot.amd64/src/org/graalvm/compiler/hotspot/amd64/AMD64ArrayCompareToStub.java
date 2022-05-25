@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,6 +30,7 @@ import static org.graalvm.compiler.hotspot.meta.HotSpotForeignCallsProviderImpl.
 
 import org.graalvm.compiler.api.replacements.Snippet;
 import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
+import org.graalvm.compiler.debug.GraalError;
 import org.graalvm.compiler.hotspot.HotSpotForeignCallLinkage;
 import org.graalvm.compiler.hotspot.meta.HotSpotForeignCallDescriptor;
 import org.graalvm.compiler.hotspot.meta.HotSpotProviders;
@@ -53,6 +54,25 @@ public final class AMD64ArrayCompareToStub extends SnippetStub {
 
     public AMD64ArrayCompareToStub(ForeignCallDescriptor foreignCallDescriptor, OptionValues options, HotSpotProviders providers, HotSpotForeignCallLinkage linkage) {
         super(foreignCallDescriptor.getName(), options, providers, linkage);
+    }
+
+    public static ForeignCallDescriptor getStub(ArrayCompareToNode arrayCompareToNode) {
+        JavaKind kind1 = arrayCompareToNode.getKind1();
+        JavaKind kind2 = arrayCompareToNode.getKind2();
+        if (kind1 == JavaKind.Byte) {
+            if (kind2 == JavaKind.Byte) {
+                return AMD64ArrayCompareToStub.STUB_BYTE_ARRAY_COMPARE_TO_BYTE_ARRAY;
+            } else if (kind2 == JavaKind.Char) {
+                return AMD64ArrayCompareToStub.STUB_BYTE_ARRAY_COMPARE_TO_CHAR_ARRAY;
+            }
+        } else if (kind1 == JavaKind.Char) {
+            if (kind2 == JavaKind.Byte) {
+                return AMD64ArrayCompareToStub.STUB_CHAR_ARRAY_COMPARE_TO_BYTE_ARRAY;
+            } else if (kind2 == JavaKind.Char) {
+                return AMD64ArrayCompareToStub.STUB_CHAR_ARRAY_COMPARE_TO_CHAR_ARRAY;
+            }
+        }
+        throw GraalError.shouldNotReachHere();
     }
 
     @Snippet

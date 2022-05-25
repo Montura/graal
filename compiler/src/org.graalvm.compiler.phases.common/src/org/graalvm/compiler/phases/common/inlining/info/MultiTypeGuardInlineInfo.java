@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -219,7 +219,7 @@ public class MultiTypeGuardInlineInfo extends AbstractInlineInfo {
 
             assert exceptionEdge.stateAfter().bci == invoke.bci();
             assert exceptionEdge.stateAfter().rethrowException();
-            exceptionMerge.setStateAfter(exceptionEdge.stateAfter().duplicateModified(JavaKind.Object, JavaKind.Object, exceptionObjectPhi));
+            exceptionMerge.setStateAfter(exceptionEdge.stateAfter().duplicateModified(JavaKind.Object, JavaKind.Object, exceptionObjectPhi, null));
         }
 
         // create one separate block for each invoked method
@@ -343,7 +343,7 @@ public class MultiTypeGuardInlineInfo extends AbstractInlineInfo {
         AbstractBeginNode[] successors = new AbstractBeginNode[]{calleeEntryNode, unknownTypeSux};
         createDispatchOnTypeBeforeInvoke(graph, successors, false, stampProvider, constantReflection);
 
-        calleeEntryNode.setNext(invoke.asNode());
+        calleeEntryNode.setNext(invoke.asFixedNode());
 
         return inline(invoke, methodAt(0), inlineableElementAt(0), false, reason);
     }
@@ -385,7 +385,7 @@ public class MultiTypeGuardInlineInfo extends AbstractInlineInfo {
                     PhiNode exceptionObjectPhi, boolean useForInlining) {
         Invoke duplicatedInvoke = duplicateInvokeForInlining(graph, invoke, exceptionMerge, exceptionObjectPhi, useForInlining);
         AbstractBeginNode calleeEntryNode = graph.add(new BeginNode());
-        calleeEntryNode.setNext(duplicatedInvoke.asNode());
+        calleeEntryNode.setNext(duplicatedInvoke.asFixedNode());
 
         EndNode endNode = graph.add(new EndNode());
         duplicatedInvoke.setNext(endNode);
@@ -420,7 +420,7 @@ public class MultiTypeGuardInlineInfo extends AbstractInlineInfo {
 
             ExceptionObjectNode newExceptionEdge = (ExceptionObjectNode) exceptionEdge.copyWithInputs();
             // set new state (pop old exception object, push new one)
-            newExceptionEdge.setStateAfter(stateAfterException.duplicateModified(JavaKind.Object, JavaKind.Object, newExceptionEdge));
+            newExceptionEdge.setStateAfter(stateAfterException.duplicateModified(JavaKind.Object, JavaKind.Object, newExceptionEdge, null));
 
             EndNode endNode = graph.add(new EndNode());
             newExceptionEdge.setNext(endNode);
@@ -465,7 +465,7 @@ public class MultiTypeGuardInlineInfo extends AbstractInlineInfo {
         AbstractBeginNode[] successors = new AbstractBeginNode[]{invocationEntry, unknownTypeSux};
         createDispatchOnTypeBeforeInvoke(graph, successors, true, stampProvider, constantReflection);
 
-        invocationEntry.setNext(invoke.asNode());
+        invocationEntry.setNext(invoke.asFixedNode());
         ValueNode receiver = ((MethodCallTargetNode) invoke.callTarget()).receiver();
         PiNode anchoredReceiver = InliningUtil.createAnchoredReceiver(graph, invocationEntry, target.getDeclaringClass(), receiver, false);
         invoke.callTarget().replaceFirstInput(receiver, anchoredReceiver);

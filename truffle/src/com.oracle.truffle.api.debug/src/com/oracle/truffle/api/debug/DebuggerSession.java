@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -74,7 +74,6 @@ import com.oracle.truffle.api.frame.FrameDescriptor;
 import com.oracle.truffle.api.frame.FrameInstance;
 import com.oracle.truffle.api.frame.FrameInstance.FrameAccess;
 import com.oracle.truffle.api.frame.FrameInstanceVisitor;
-import com.oracle.truffle.api.frame.FrameSlot;
 import com.oracle.truffle.api.frame.MaterializedFrame;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.instrumentation.EventBinding;
@@ -84,9 +83,9 @@ import com.oracle.truffle.api.instrumentation.ExecutionEventNodeFactory;
 import com.oracle.truffle.api.instrumentation.InstrumentableNode;
 import com.oracle.truffle.api.instrumentation.ProbeNode;
 import com.oracle.truffle.api.instrumentation.SourceSectionFilter;
-import com.oracle.truffle.api.instrumentation.TruffleInstrument;
 import com.oracle.truffle.api.instrumentation.SourceSectionFilter.Builder;
 import com.oracle.truffle.api.instrumentation.StandardTags.RootTag;
+import com.oracle.truffle.api.instrumentation.TruffleInstrument;
 import com.oracle.truffle.api.nodes.ExecutableNode;
 import com.oracle.truffle.api.nodes.LanguageInfo;
 import com.oracle.truffle.api.nodes.Node;
@@ -304,7 +303,7 @@ public final class DebuggerSession implements Closeable {
      * @since 0.30
      */
     public Map<String, ? extends DebugValue> getExportedSymbols() {
-        return new AbstractMap<String, DebugValue>() {
+        return new AbstractMap<>() {
             private final DebugValue polyglotBindings = new DebugValue.HeapValue(DebuggerSession.this, "polyglot", debugger.getEnv().getPolyglotBindings());
 
             @Override
@@ -426,64 +425,61 @@ public final class DebuggerSession implements Closeable {
         if (event != null) {
             throw new IllegalStateException("Suspended already");
         }
-        RootNode nodeRoot = null;
+        RootNode nodeRoot;
         if (node != null) {
             nodeRoot = node.getRootNode();
             if (nodeRoot == null) {
                 throw new IllegalArgumentException(String.format("The node %s does not have a root.", node));
             }
+        } else {
+            nodeRoot = null;
         }
-        FrameInstance frameInstance = Truffle.getRuntime().getCurrentFrame();
-        if (frameInstance == null) {
-            return false;
-        }
-        RootNode root = ((RootCallTarget) frameInstance.getCallTarget()).getRootNode();
-        if (!includeInternal) {
-            if (root.isInternal()) {
-                // In an internal code, we need to iterate stack to find non-internal location
-                frameInstance = Truffle.getRuntime().iterateFrames(new FrameInstanceVisitor<FrameInstance>() {
-                    int startDepth = 1;
 
-                    @Override
-                    public FrameInstance visitFrame(FrameInstance fi) {
-                        if (startDepth-- > 0) {
-                            return null;
-                        }
-                        if (!((RootCallTarget) fi.getCallTarget()).getRootNode().isInternal()) {
-                            return fi;
-                        }
-                        return null;
-                    }
-                });
-                if (frameInstance == null) {
-                    return false;
-                } else {
-                    root = ((RootCallTarget) frameInstance.getCallTarget()).getRootNode();
+        SuspendContextAndFrame result = Truffle.getRuntime().iterateFrames((frameInstance) -> {
+            RootNode root = ((RootCallTarget) frameInstance.getCallTarget()).getRootNode();
+            if (!includeInternal) {
+                if (root.isInternal()) {
+                    return null;
                 }
             }
-        }
-        if (nodeRoot != null && nodeRoot != root) {
-            throw new IllegalArgumentException(String.format("The node %s belongs to a root %s, which is different from the current root %s.", node, nodeRoot, root));
-        }
-        Node callNode = frameInstance.getCallNode();
-        if (callNode == null) {
-            callNode = node;
-            if (callNode == null) {
-                // We have no idea where in the function we are.
-                callNode = root;
+            if (nodeRoot != null && nodeRoot != root) {
+                throw new IllegalArgumentException(String.format("The node %s belongs to a root %s, which is different from the current root %s.", node, nodeRoot, root));
             }
+            Node callNode = frameInstance.getCallNode();
+            if (callNode == null) {
+                callNode = node;
+                if (callNode == null) {
+                    // We have no idea where in the function we are.
+                    callNode = root;
+                }
+            }
+            if (node != null && node != callNode) {
+                throw new IllegalArgumentException(String.format("The node %s does not match the current known call node %s.", node, callNode));
+            }
+            Node icallNode = InstrumentableNode.findInstrumentableParent(callNode);
+            if (icallNode != null) {
+                callNode = icallNode;
+            }
+            MaterializedFrame frame = frameInstance.getFrame(FrameAccess.MATERIALIZE).materialize();
+            SuspendedContext context = SuspendedContext.create(callNode, null);
+            return new SuspendContextAndFrame(context, frame);
+        });
+        if (result == null) {
+            return false;
         }
-        if (node != null && node != callNode) {
-            throw new IllegalArgumentException(String.format("The node %s does not match the current known call node %s.", node, callNode));
-        }
-        Node icallNode = InstrumentableNode.findInstrumentableParent(callNode);
-        if (icallNode != null) {
-            callNode = icallNode;
-        }
-        MaterializedFrame frame = frameInstance.getFrame(FrameAccess.READ_WRITE).materialize();
-        SuspendedContext context = SuspendedContext.create(callNode, null);
-        doSuspend(context, SuspendAnchor.BEFORE, frame, null);
+        doSuspend(result.context, SuspendAnchor.BEFORE, result.frame, null);
         return true;
+    }
+
+    static final class SuspendContextAndFrame {
+
+        final SuspendedContext context;
+        final MaterializedFrame frame;
+
+        SuspendContextAndFrame(SuspendedContext context, MaterializedFrame frame) {
+            this.context = context;
+            this.frame = frame;
+        }
     }
 
     /**
@@ -696,6 +692,24 @@ public final class DebuggerSession implements Closeable {
     }
 
     /**
+     * Creates a {@link DebugValue} object that wraps a primitive value. Strings and boxed Java
+     * primitive types are considered primitive. Throws {@link IllegalArgumentException} if the
+     * value is not primitive.
+     *
+     * @param primitiveValue a primitive value
+     * @param language guest language this value is value is associated with. Some value attributes
+     *            depend on the language, like {@link DebugValue#getMetaObject()}. Can be
+     *            <code>null</code>.
+     * @return a {@link DebugValue} that wraps the primitive value.
+     * @throws IllegalArgumentException if the value is not a boxed Java primitive or a String.
+     * @since 21.2
+     */
+    public DebugValue createPrimitiveValue(Object primitiveValue, LanguageInfo language) throws IllegalArgumentException {
+        DebugValue.checkPrimitive(primitiveValue);
+        return new DebugValue.HeapValue(this, language, null, primitiveValue);
+    }
+
+    /**
      * Closes the current debugging session and disposes all installed breakpoints.
      *
      * @since 0.17
@@ -761,7 +775,7 @@ public final class DebuggerSession implements Closeable {
      * @since 0.24
      * @deprecated Use {@link #setBreakpointsActive(Breakpoint.Kind, boolean)} instead.
      */
-    @Deprecated
+    @Deprecated(since = "19.0")
     public void setBreakpointsActive(boolean active) {
         for (Breakpoint.Kind kind : Breakpoint.Kind.VALUES) {
             setBreakpointsActive(kind, active);
@@ -802,7 +816,7 @@ public final class DebuggerSession implements Closeable {
      * @since 0.24
      * @deprecated Use {@link #isBreakpointsActive(Breakpoint.Kind)} instead.
      */
-    @Deprecated
+    @Deprecated(since = "19.0")
     public boolean isBreakpointsActive() {
         for (Breakpoint.Kind kind : Breakpoint.Kind.VALUES) {
             if (isBreakpointsActive(kind)) {
@@ -1076,13 +1090,20 @@ public final class DebuggerSession implements Closeable {
         return newReturnValue;
     }
 
+    @SuppressWarnings("deprecation")
     private static void clearFrame(RootNode root, MaterializedFrame frame) {
         FrameDescriptor descriptor = frame.getFrameDescriptor();
         if (root.getFrameDescriptor() == descriptor) {
             // Clear only those frames that correspond to the current root
             Object value = descriptor.getDefaultValue();
-            for (FrameSlot slot : descriptor.getSlots()) {
+            for (com.oracle.truffle.api.frame.FrameSlot slot : descriptor.getSlots()) {
                 frame.setObject(slot, value);
+            }
+            for (int slot = 0; slot < descriptor.getNumberOfSlots(); slot++) {
+                frame.setObject(slot, value);
+            }
+            for (int slot = 0; slot < descriptor.getNumberOfAuxiliarySlots(); slot++) {
+                frame.setAuxiliarySlot(slot, null);
             }
         }
     }
@@ -1449,7 +1470,7 @@ public final class DebuggerSession implements Closeable {
             throw new IllegalArgumentException("Cannot evaluate in context using a without an associated TruffleLanguage.");
         }
 
-        final Source source = Source.newBuilder(info.getId(), code, "eval in context").internal(true).build();
+        final Source source = Source.newBuilder(info.getId(), code, "eval in context").internal(false).build();
         ExecutableNode fragment = ev.getSession().getDebugger().getEnv().parseInline(source, node, frame);
         if (fragment != null) {
             ev.getInsertableNode().setParentOf(fragment);

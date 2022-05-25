@@ -26,8 +26,6 @@ package com.oracle.svm.core.monitor;
 
 import java.util.Map;
 
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
-import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.phases.util.Providers;
@@ -53,15 +51,15 @@ public class MonitorFeature implements GraalFeature {
     }
 
     @Override
-    public void registerLowerings(RuntimeConfiguration runtimeConfig, OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers, SnippetReflectionProvider snippetReflection,
+    public void registerLowerings(RuntimeConfiguration runtimeConfig, OptionValues options, Providers providers,
                     Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings, boolean hosted) {
-        new MonitorSnippets(options, factories, providers, snippetReflection).registerLowerings(lowerings);
+        new MonitorSnippets(options, providers).registerLowerings(lowerings);
     }
 
     @Override
-    public void registerForeignCalls(RuntimeConfiguration runtimeConfig, Providers providers, SnippetReflectionProvider snippetReflection, SubstrateForeignCallsProvider foreignCalls, boolean hosted) {
+    public void registerForeignCalls(SubstrateForeignCallsProvider foreignCalls) {
         if (SubstrateOptions.MultiThreaded.getValue()) {
-            foreignCalls.register(providers, MonitorSnippets.FOREIGN_CALLS);
+            foreignCalls.register(MonitorSnippets.FOREIGN_CALLS);
         }
     }
 }

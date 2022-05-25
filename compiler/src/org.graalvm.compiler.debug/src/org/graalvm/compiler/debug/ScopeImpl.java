@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -220,7 +220,7 @@ public final class ScopeImpl implements DebugContext.Scope {
             DebugConfig config = getConfig();
             if (config != null) {
                 for (DebugDumpHandler dumpHandler : config.dumpHandlers()) {
-                    dumpHandler.dump(owner, object, formatString, args);
+                    dumpHandler.dump(object, owner, false, formatString, args);
                 }
             }
         }
@@ -382,11 +382,11 @@ public final class ScopeImpl implements DebugContext.Scope {
     @Override
     public Iterable<Object> getCurrentContext() {
         final ScopeImpl scope = this;
-        return new Iterable<Object>() {
+        return new Iterable<>() {
 
             @Override
             public Iterator<Object> iterator() {
-                return new Iterator<Object>() {
+                return new Iterator<>() {
 
                     ScopeImpl currentScope = scope;
                     int objectIndex;

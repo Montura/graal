@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -31,8 +31,8 @@ import org.graalvm.compiler.core.common.type.TypeReference;
 import org.graalvm.compiler.graph.IterableNodeType;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.NodeClass;
-import org.graalvm.compiler.graph.spi.Simplifiable;
-import org.graalvm.compiler.graph.spi.SimplifierTool;
+import org.graalvm.compiler.nodes.spi.Simplifiable;
+import org.graalvm.compiler.nodes.spi.SimplifierTool;
 import org.graalvm.compiler.nodeinfo.NodeInfo;
 import org.graalvm.compiler.nodeinfo.Verbosity;
 import org.graalvm.compiler.nodes.BeginNode;
@@ -62,16 +62,16 @@ import jdk.vm.ci.meta.ResolvedJavaType;
 @NodeInfo
 public class MethodCallTargetNode extends CallTargetNode implements IterableNodeType, Simplifiable {
     public static final NodeClass<MethodCallTargetNode> TYPE = NodeClass.create(MethodCallTargetNode.class);
-    protected JavaTypeProfile profile;
+    protected JavaTypeProfile typeProfile;
 
-    public MethodCallTargetNode(InvokeKind invokeKind, ResolvedJavaMethod targetMethod, ValueNode[] arguments, StampPair returnStamp, JavaTypeProfile profile) {
-        this(TYPE, invokeKind, targetMethod, arguments, returnStamp, profile);
+    public MethodCallTargetNode(InvokeKind invokeKind, ResolvedJavaMethod targetMethod, ValueNode[] arguments, StampPair returnStamp, JavaTypeProfile typeProfile) {
+        this(TYPE, invokeKind, targetMethod, arguments, returnStamp, typeProfile);
     }
 
     protected MethodCallTargetNode(NodeClass<? extends MethodCallTargetNode> c, InvokeKind invokeKind, ResolvedJavaMethod targetMethod, ValueNode[] arguments, StampPair returnStamp,
-                    JavaTypeProfile profile) {
+                    JavaTypeProfile typeProfile) {
         super(c, arguments, targetMethod, invokeKind, returnStamp);
-        this.profile = profile;
+        this.typeProfile = typeProfile;
     }
 
     /**
@@ -179,7 +179,7 @@ public class MethodCallTargetNode extends CallTargetNode implements IterableNode
         }
 
         if (invokeKind.isInterface()) {
-            MethodCallTargetNode result = tryDevirtualizeInterfaceCall(receiver(), targetMethod, profile, graph().getAssumptions(), contextType, this, invoke().asNode());
+            MethodCallTargetNode result = tryDevirtualizeInterfaceCall(receiver(), targetMethod, typeProfile, graph().getAssumptions(), contextType, this, invoke().asFixedNode());
             assert result == this;
         }
     }
@@ -282,8 +282,8 @@ public class MethodCallTargetNode extends CallTargetNode implements IterableNode
         return null;
     }
 
-    public JavaTypeProfile getProfile() {
-        return profile;
+    public JavaTypeProfile getTypeProfile() {
+        return typeProfile;
     }
 
     @Override
@@ -304,6 +304,6 @@ public class MethodCallTargetNode extends CallTargetNode implements IterableNode
     }
 
     public void setJavaTypeProfile(JavaTypeProfile profile) {
-        this.profile = profile;
+        this.typeProfile = profile;
     }
 }

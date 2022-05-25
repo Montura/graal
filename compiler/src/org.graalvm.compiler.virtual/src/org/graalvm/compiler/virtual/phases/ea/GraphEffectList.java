@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,11 +42,13 @@ import org.graalvm.compiler.nodes.PiNode;
 import org.graalvm.compiler.nodes.StructuredGraph;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.WithExceptionNode;
+import org.graalvm.compiler.nodes.calc.FloatingNode;
 import org.graalvm.compiler.nodes.debug.DynamicCounterNode;
 import org.graalvm.compiler.nodes.debug.WeakCounterNode;
 import org.graalvm.compiler.nodes.memory.MemoryKill;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 import org.graalvm.compiler.nodes.virtual.EscapeObjectState;
+import org.graalvm.compiler.nodes.virtual.VirtualObjectState;
 import org.graalvm.compiler.phases.common.DeadCodeEliminationPhase;
 
 public final class GraphEffectList extends EffectList {
@@ -82,7 +84,8 @@ public final class GraphEffectList extends EffectList {
 
     /**
      * Adds the given fixed node to the graph's control flow, before position (so that the original
-     * predecessor of position will then be node's predecessor).
+     * predecessor of position will then be node's predecessor). The node must not yet be part of
+     * the graph.
      *
      * @param node The fixed node to be added to the graph.
      * @param position The fixed node before which the node should be added.
@@ -94,6 +97,13 @@ public final class GraphEffectList extends EffectList {
         });
     }
 
+    /**
+     * Add {@code node} to the graph if it is not yet part of the graph. {@code node} must be a
+     * {@link FixedNode}. If it is not yet part of the graph, it is added before {@code position}.
+     *
+     * @param node The fixed node to be added to the graph if not yet present.
+     * @param position The fixed node before which the node should be added if not yet present.
+     */
     public void ensureAdded(ValueNode node, FixedNode position) {
         add("ensure added", graph -> {
             assert position.isAlive();
@@ -116,13 +126,30 @@ public final class GraphEffectList extends EffectList {
     }
 
     /**
-     * Add the given floating node to the graph.
+     * Add the given floating node to the graph. The node must not yet be part of the graph.
      *
      * @param node The floating node to be added.
      */
     public void addFloatingNode(ValueNode node, @SuppressWarnings("unused") String cause) {
         add("add floating node", graph -> {
+            assert !node.isAlive() && !node.isDeleted();
             graph.addWithoutUniqueWithInputs(node);
+        });
+    }
+
+    /**
+     * Add {@code node} to the graph if it is not yet part of the graph. {@code node} must be a
+     * {@link FloatingNode}.
+     *
+     * @param node The floating node to be added to the graph if not yet present.
+     */
+    public void ensureFloatingAdded(ValueNode node) {
+        add("ensure floating added", graph -> {
+            assert node instanceof FloatingNode;
+            assert !node.isDeleted();
+            if (!node.isAlive()) {
+                graph.addWithoutUniqueWithInputs(node);
+            }
         });
     }
 
@@ -142,8 +169,8 @@ public final class GraphEffectList extends EffectList {
     }
 
     /**
-     * Adds a virtual object's state to the given frame state. If the given reusedVirtualObjects set
-     * contains the virtual object then old states for this object will be removed.
+     * Adds a virtual object's state to the given frame state. If the given frame state contains the
+     * virtual object then old states for this object will be removed.
      *
      * @param node The frame state to which the state should be added.
      * @param state The virtual object state to add.
@@ -161,6 +188,29 @@ public final class GraphEffectList extends EffectList {
                         }
                     }
                     stateAfter.addVirtualObjectMapping(graph.addOrUniqueWithInputs(state));
+                }
+            }
+
+            @Override
+            public boolean isVisible() {
+                return false;
+            }
+        });
+    }
+
+    /**
+     * Update a virtual object mapping for the given {@link VirtualObjectState} with a new value.
+     *
+     * @param state The virtual state previously constructed.
+     * @param field The field to update its value.
+     * @param newValue The new value of the field.
+     */
+    public void updateVirtualMapping(VirtualObjectState state, int field, ValueNode newValue) {
+        add("add virtual mapping", new Effect() {
+            @Override
+            public void apply(StructuredGraph graph, ArrayList<Node> obsoleteNodes) {
+                if (state.isAlive()) {
+                    state.values().set(field, graph.addOrUniqueWithInputs(newValue));
                 }
             }
 

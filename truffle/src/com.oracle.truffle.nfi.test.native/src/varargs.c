@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -106,7 +106,7 @@ static char *add_pointer(char *dest, char *end, void *value) {
         return add_string(dest, end, "(nil)");
     } else {
         dest = add_string(dest, end, "0x");
-        return add_int(dest, end, (int64_t) value, 16);
+        return add_int(dest, end, (int64_t)(intptr_t)value, 16);
     }
 }
 

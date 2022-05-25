@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,7 +40,7 @@
  */
 package com.oracle.truffle.api.test.polyglot;
 
-import com.oracle.truffle.api.test.OSUtils;
+import static com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -69,20 +69,38 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Source.Builder;
 import org.graalvm.polyglot.SourceSection;
+import org.graalvm.polyglot.Value;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractSourceDispatch;
+import org.graalvm.polyglot.impl.AbstractPolyglotImpl.AbstractSourceSectionDispatch;
 import org.graalvm.polyglot.io.ByteSequence;
 import org.junit.Assert;
+import org.junit.Assume;
 import org.junit.Test;
 
+import com.oracle.truffle.api.CallTarget;
+import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.TruffleLanguage;
+import com.oracle.truffle.api.instrumentation.ProvidedTags;
+import com.oracle.truffle.api.instrumentation.StandardTags;
+import com.oracle.truffle.api.interop.InteropLibrary;
+import com.oracle.truffle.api.interop.TruffleObject;
+import com.oracle.truffle.api.library.ExportLibrary;
+import com.oracle.truffle.api.library.ExportMessage;
+import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.api.test.OSUtils;
 import com.oracle.truffle.api.test.ReflectionUtils;
-import org.junit.Assume;
+import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 public class SourceAPITest {
 
     @Test
     public void testCharSequenceNotMaterialized() throws IOException {
+        TruffleTestAssumptions.assumeWeakEncapsulation();
         AtomicBoolean materialized = new AtomicBoolean(false);
         final CharSequence testString = "testString";
         Source source = Source.newBuilder(SourceAPITestLanguage.ID, new CharSequence() {
@@ -528,7 +546,9 @@ public class SourceAPITest {
     public void testHttpURL() throws IOException, URISyntaxException {
         URL resource = new URL("http://example.org/test/File.html");
         Source s = Source.newBuilder("TestJS", resource).content("Empty").build();
-        assertEquals(resource, s.getURL());
+        // The URL is converted into URI before comparison to skip the expensive hostname
+        // normalization.
+        assertEquals(resource.toURI(), s.getURL().toURI());
         assertEquals(resource.toURI(), s.getURI());
         assertEquals("File.html", s.getName());
         assertEquals("/test/File.html", s.getPath());
@@ -658,10 +678,12 @@ public class SourceAPITest {
     @Test
     @SuppressWarnings("rawtypes")
     public void testNoContentSource() {
+        AbstractPolyglotImpl polyglot = (AbstractPolyglotImpl) ReflectionUtils.invokeStatic(Engine.class, "getImpl");
         com.oracle.truffle.api.source.Source truffleSource = com.oracle.truffle.api.source.Source.newBuilder(ProxyLanguage.ID, "x", "name").content(
                         com.oracle.truffle.api.source.Source.CONTENT_NONE).build();
-        Class<?>[] sourceConstructorTypes = new Class[]{Object.class};
-        Source source = ReflectionUtils.newInstance(Source.class, sourceConstructorTypes, truffleSource);
+        Class<?>[] sourceConstructorTypes = new Class[]{AbstractSourceDispatch.class, Object.class};
+        Source source = ReflectionUtils.newInstance(Source.class, sourceConstructorTypes,
+                        polyglot.getAPIAccess().getDispatch(Source.create(ProxyLanguage.ID, "")), truffleSource);
         assertFalse(source.hasCharacters());
         assertFalse(source.hasBytes());
         try {
@@ -677,13 +699,66 @@ public class SourceAPITest {
             // O.K.
         }
         com.oracle.truffle.api.source.SourceSection truffleSection = truffleSource.createSection(1, 2, 3, 4);
-        Class<?>[] sectionConstructorTypes = new Class[]{Source.class, Object.class};
-        SourceSection section = ReflectionUtils.newInstance(SourceSection.class, sectionConstructorTypes, source, truffleSection);
+        Class<?>[] sectionConstructorTypes = new Class[]{Source.class, AbstractSourceSectionDispatch.class, Object.class};
+        SourceSection section = ReflectionUtils.newInstance(SourceSection.class, sectionConstructorTypes, source,
+                        getSourceSectionDispatch(polyglot), truffleSection);
         assertFalse(section.hasCharIndex());
         assertTrue(section.hasLines());
         assertTrue(section.hasColumns());
         assertEquals("", section.getCharacters());
         assertTrue(truffleSource.getURI().toString().contains("name"));
+    }
+
+    @TruffleLanguage.Registration(id = SourceSectionDispatchLanguage.ID, name = SourceSectionDispatchLanguage.ID, version = "1.0", contextPolicy = TruffleLanguage.ContextPolicy.SHARED, //
+                    characterMimeTypes = "application/x-source-section-dispatch-language")
+    @ProvidedTags({StandardTags.RootTag.class})
+    static class SourceSectionDispatchLanguage extends TruffleLanguage<Object> {
+        static final String ID = "SourceAPITest_SourceSectionDispatchLanguage";
+
+        @Override
+        protected Object createContext(Env env) {
+            return new Object();
+        }
+
+        @Override
+        protected CallTarget parse(ParsingRequest request) throws Exception {
+            return RootNode.createConstantNode(new SourceSectionProvider(request.getSource())).getCallTarget();
+        }
+    }
+
+    private static AbstractSourceSectionDispatch getSourceSectionDispatch(AbstractPolyglotImpl polyglot) {
+        try (Context context = Context.create(SourceSectionDispatchLanguage.ID)) {
+            Value res = context.eval(Source.create(SourceSectionDispatchLanguage.ID, ""));
+            SourceSection sourceSection = res.getSourceLocation();
+            return polyglot.getAPIAccess().getDispatch(sourceSection);
+        }
+    }
+
+    @ExportLibrary(InteropLibrary.class)
+    static final class SourceSectionProvider implements TruffleObject {
+
+        private final com.oracle.truffle.api.source.Source source;
+
+        SourceSectionProvider(com.oracle.truffle.api.source.Source source) {
+            this.source = source;
+        }
+
+        @ExportMessage
+        @SuppressWarnings("static-method")
+        public boolean hasSourceLocation() {
+            return true;
+        }
+
+        @ExportMessage
+        @TruffleBoundary
+        public com.oracle.truffle.api.source.SourceSection getSourceLocation() {
+            return getSection();
+        }
+
+        @CompilerDirectives.TruffleBoundary
+        private com.oracle.truffle.api.source.SourceSection getSection() {
+            return source.createSection(0, 0);
+        }
     }
 
     @Test

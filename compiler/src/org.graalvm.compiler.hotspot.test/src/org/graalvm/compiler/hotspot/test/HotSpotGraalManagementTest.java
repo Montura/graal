@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -202,7 +202,7 @@ public class HotSpotGraalManagementTest {
                 Object defaultValue;
                 if (optionKey instanceof NestedBooleanOptionKey) {
                     NestedBooleanOptionKey nbok = (NestedBooleanOptionKey) optionKey;
-                    defaultValue = nbok.getMasterOption().getValue(runtime.getOptions());
+                    defaultValue = nbok.getParentOption().getValue(runtime.getOptions());
                 } else {
                     defaultValue = optionKey.getDefaultValue();
                 }

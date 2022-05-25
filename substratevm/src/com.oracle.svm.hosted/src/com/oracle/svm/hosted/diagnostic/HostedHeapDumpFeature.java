@@ -53,11 +53,12 @@ public class HostedHeapDumpFeature implements Feature {
 
     static class Options {
         @Option(help = "Dump the heap at a specific time during image building." +
-                        "The option accepts a list of comma separated phases, any of: after-analysis, before-compilation.")//
+                        "The option accepts a list of comma separated phases, any of: during-analysis, after-analysis, before-compilation.")//
         public static final HostedOptionKey<LocatableMultiOptionValue.Strings> DumpHeap = new HostedOptionKey<>(new LocatableMultiOptionValue.Strings());
     }
 
     enum Phases {
+        DuringAnalysis("during-analysis"),
         AfterAnalysis("after-analysis"),
         BeforeCompilation("before-compilation");
 
@@ -74,22 +75,18 @@ public class HostedHeapDumpFeature implements Feature {
 
     @Override
     public boolean isInConfiguration(IsInConfigurationAccess access) {
-        if (Options.DumpHeap.getValue() != null) {
-            List<String> validPhases = Stream.of(Phases.values()).map(Phases::getName).collect(Collectors.toList());
-            List<String> values = OptionUtils.flatten(",", Options.DumpHeap.getValue());
-            phases = new ArrayList<>();
-            for (String value : values) {
-                if (validPhases.contains(value)) {
-                    phases.add(value);
-                } else {
-                    throw UserError.abort("Invalid value %s given for %s. Valid values are: %s.", value,
-                                    SubstrateOptionsParser.commandArgument(Options.DumpHeap, ""), String.join(", ", validPhases));
-                }
+        List<String> validPhases = Stream.of(Phases.values()).map(Phases::getName).collect(Collectors.toList());
+        List<String> values = OptionUtils.flatten(",", Options.DumpHeap.getValue());
+        phases = new ArrayList<>();
+        for (String value : values) {
+            if (validPhases.contains(value)) {
+                phases.add(value);
+            } else {
+                throw UserError.abort("Invalid value %s given for %s. Valid values are: %s.", value,
+                                SubstrateOptionsParser.commandArgument(Options.DumpHeap, ""), String.join(", ", validPhases));
             }
-            return !phases.isEmpty();
         }
-
-        return false;
+        return !phases.isEmpty();
     }
 
     private List<String> phases;
@@ -103,6 +100,15 @@ public class HostedHeapDumpFeature implements Feature {
         dumpLocation = getDumpLocation();
         imageName = ReportUtils.extractImageName(config.getHostVM().getImageName());
         timeStamp = getTimeStamp();
+    }
+
+    private int iteration;
+
+    @Override
+    public void duringAnalysis(DuringAnalysisAccess access) {
+        if (phases.contains(Phases.DuringAnalysis.getName())) {
+            dumpHeap(Phases.DuringAnalysis.getName() + "-" + iteration++);
+        }
     }
 
     @Override

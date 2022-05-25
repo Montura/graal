@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,10 +28,8 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
-import java.util.Arrays;
-
 import org.graalvm.compiler.truffle.runtime.OptimizedCallTarget;
-import org.graalvm.polyglot.Context;
+import org.graalvm.polyglot.Context.Builder;
 import org.junit.Before;
 
 /**
@@ -51,6 +49,7 @@ public abstract class TestWithSynchronousCompiling extends TestWithPolyglotOptio
                     "engine.SingleTierCompilationThreshold", "10", //
                     "engine.LastTierCompilationThreshold", "10", //
                     "engine.FirstTierCompilationThreshold", "5", //
+                    "engine.DynamicCompilationThresholds", Boolean.FALSE.toString(), //
                     "engine.CompileImmediately", Boolean.FALSE.toString()
     };
 
@@ -59,16 +58,17 @@ public abstract class TestWithSynchronousCompiling extends TestWithPolyglotOptio
         setupContext();
     }
 
+    /**
+     * Creates a new {@link Builder} with default {@link TestWithSynchronousCompiling} options set.
+     * The default options can be overwritten using {@link Builder#option(String, String)}.
+     */
     @Override
-    protected final Context setupContext(String... keyValuePairs) {
-        String[] newOptions;
-        if (keyValuePairs.length == 0) {
-            newOptions = DEFAULT_OPTIONS;
-        } else {
-            newOptions = Arrays.copyOf(DEFAULT_OPTIONS, DEFAULT_OPTIONS.length + keyValuePairs.length);
-            System.arraycopy(keyValuePairs, 0, newOptions, DEFAULT_OPTIONS.length, keyValuePairs.length);
+    protected Builder newContextBuilder() {
+        Builder builder = super.newContextBuilder();
+        for (int i = 0; i < DEFAULT_OPTIONS.length; i += 2) {
+            builder.option(DEFAULT_OPTIONS[i], DEFAULT_OPTIONS[i + 1]);
         }
-        return super.setupContext(newOptions);
+        return builder;
     }
 
     protected static void assertCompiled(OptimizedCallTarget target) {

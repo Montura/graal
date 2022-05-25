@@ -38,10 +38,12 @@ import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.espresso.descriptors.Symbol;
 import com.oracle.truffle.espresso.descriptors.Symbol.Type;
 import com.oracle.truffle.espresso.descriptors.Types;
+import com.oracle.truffle.espresso.jdwp.api.ModuleRef;
 import com.oracle.truffle.espresso.meta.Meta;
+import com.oracle.truffle.espresso.redefinition.DefineKlassListener;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.StaticObject;
-import com.oracle.truffle.espresso.substitutions.Host;
+import com.oracle.truffle.espresso.substitutions.JavaType;
 import com.oracle.truffle.espresso.vm.InterpreterToVM;
 
 public final class ClassRegistries {
@@ -61,6 +63,8 @@ public final class ClassRegistries {
     // specify it as volatile.
     private int totalClassLoadersSet = 0;
 
+    private DefineKlassListener defineKlassListener;
+
     public ClassRegistries(EspressoContext context) {
         this.context = context;
         this.bootClassRegistry = new BootClassRegistry(context);
@@ -71,7 +75,7 @@ public final class ClassRegistries {
         this.javaBaseModule = bootClassRegistry.modules().createAndAddEntry(Symbol.Name.java_base, bootClassRegistry);
     }
 
-    public ClassRegistry getClassRegistry(@Host(ClassLoader.class) StaticObject classLoader) {
+    public ClassRegistry getClassRegistry(@JavaType(ClassLoader.class) StaticObject classLoader) {
         if (StaticObject.isNull(classLoader)) {
             return bootClassRegistry;
         }
@@ -98,7 +102,7 @@ public final class ClassRegistries {
     }
 
     @TruffleBoundary
-    private ClassRegistry registerRegistry(@Host(ClassLoader.class) StaticObject classLoader) {
+    private ClassRegistry registerRegistry(@JavaType(ClassLoader.class) StaticObject classLoader) {
         assert Thread.holdsLock(weakClassLoaderSet);
         ClassRegistry classRegistry;
         classRegistry = new GuestClassRegistry(context, classLoader);
@@ -123,7 +127,7 @@ public final class ClassRegistries {
     }
 
     @TruffleBoundary
-    public Klass findLoadedClass(Symbol<Type> type, @Host(ClassLoader.class) StaticObject classLoader) {
+    public Klass findLoadedClass(Symbol<Type> type, @JavaType(ClassLoader.class) StaticObject classLoader) {
         assert classLoader != null : "use StaticObject.NULL for BCL";
 
         if (Types.isArray(type)) {
@@ -191,6 +195,20 @@ public final class ClassRegistries {
         return list.toArray(Klass.EMPTY_ARRAY);
     }
 
+    public ModuleRef[] getAllModuleRefs() {
+        ArrayList<ModuleRef> list = new ArrayList<>();
+        // add modules from boot registry
+        list.addAll(bootClassRegistry.modules().values());
+
+        // add modules from all other registries
+        synchronized (weakClassLoaderSet) {
+            for (StaticObject classLoader : weakClassLoaderSet) {
+                list.addAll(getClassRegistry(classLoader).modules().values());
+            }
+        }
+        return list.toArray(ModuleRef.EMPTY_ARRAY);
+    }
+
     /**
      * Do not call directly. Use
      * {@link com.oracle.truffle.espresso.meta.Meta#loadKlassOrFail(Symbol, StaticObject, StaticObject)}
@@ -199,7 +217,7 @@ public final class ClassRegistries {
      * .
      */
     @TruffleBoundary
-    public Klass loadKlass(Symbol<Type> type, @Host(ClassLoader.class) StaticObject classLoader, StaticObject protectionDomain) {
+    public Klass loadKlass(Symbol<Type> type, @JavaType(ClassLoader.class) StaticObject classLoader, StaticObject protectionDomain) {
         assert classLoader != null : "use StaticObject.NULL for BCL";
 
         if (Types.isArray(type)) {
@@ -214,10 +232,15 @@ public final class ClassRegistries {
     }
 
     @TruffleBoundary
-    public Klass defineKlass(Symbol<Type> type, byte[] bytes, StaticObject classLoader) {
+    public ObjectKlass defineKlass(Symbol<Type> type, byte[] bytes, StaticObject classLoader) {
+        return defineKlass(type, bytes, classLoader, ClassRegistry.ClassDefinitionInfo.EMPTY);
+    }
+
+    @TruffleBoundary
+    public ObjectKlass defineKlass(Symbol<Type> type, byte[] bytes, StaticObject classLoader, ClassRegistry.ClassDefinitionInfo info) {
         assert classLoader != null;
         ClassRegistry registry = getClassRegistry(classLoader);
-        return registry.defineKlass(type, bytes);
+        return registry.defineKlass(type, bytes, info);
     }
 
     public BootClassRegistry getBootClassRegistry() {
@@ -296,6 +319,17 @@ public final class ClassRegistries {
             loaders[i++] = INVALID_LOADER_ID;
         }
         return loaders;
+    }
+
+    public void registerListener(DefineKlassListener listener) {
+        this.defineKlassListener = listener;
+    }
+
+    @TruffleBoundary
+    public void onKlassDefined(ObjectKlass klass) {
+        if (defineKlassListener != null) {
+            defineKlassListener.onKlassDefined(klass);
+        }
     }
 
     static class RegistryEntry {

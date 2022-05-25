@@ -32,7 +32,6 @@ package com.oracle.truffle.llvm.nfi;
 import com.oracle.truffle.api.CallTarget;
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.CompilerDirectives.CompilationFinal;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleFile;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.ContextPolicy;
@@ -40,7 +39,7 @@ import com.oracle.truffle.api.TruffleLanguage.Env;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.library.ExportLibrary;
 import com.oracle.truffle.api.library.ExportMessage;
-import com.oracle.truffle.api.nodes.DirectCallNode;
+import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.nodes.RootNode;
 import com.oracle.truffle.api.source.Source;
 import com.oracle.truffle.nfi.backend.spi.NFIBackend;
@@ -49,10 +48,11 @@ import com.oracle.truffle.nfi.backend.spi.NFIBackendLibrary;
 import com.oracle.truffle.nfi.backend.spi.NFIBackendTools;
 import com.oracle.truffle.nfi.backend.spi.types.NativeLibraryDescriptor;
 import com.oracle.truffle.nfi.backend.spi.types.NativeSimpleType;
+
 import java.io.IOException;
 
 @TruffleLanguage.Registration(id = "internal/nfi-llvm", name = "nfi-llvm", version = "6.0.0", internal = true, interactive = false, //
-                services = NFIBackendFactory.class, contextPolicy = ContextPolicy.SHARED)
+                services = NFIBackendFactory.class, contextPolicy = ContextPolicy.SHARED, dependentLanguages = "llvm")
 public final class SulongNFI extends TruffleLanguage<Env> {
 
     @CompilationFinal private SulongNFIBackend backend;
@@ -92,12 +92,11 @@ public final class SulongNFI extends TruffleLanguage<Env> {
 
         @Override
         public CallTarget parse(NativeLibraryDescriptor descriptor) {
-            Env env = getCurrentContext(SulongNFI.class);
+            Env env = getContext(null);
             TruffleFile file = env.getInternalTruffleFile(descriptor.getFilename());
             try {
                 Source source = Source.newBuilder("llvm", file).build();
-                CallTarget target = env.parsePublic(source);
-                return wrap(SulongNFI.this, target);
+                return SulongNFIRootNodeGen.create(SulongNFI.this, source).getCallTarget();
             } catch (IOException ex) {
                 throw new SulongNFIException(ex.getMessage());
             }
@@ -124,32 +123,31 @@ public final class SulongNFI extends TruffleLanguage<Env> {
         }
     }
 
-    private static CallTarget wrap(SulongNFI nfi, CallTarget target) {
-        return Truffle.getRuntime().createCallTarget(new RootNode(nfi) {
-
-            @Child DirectCallNode call = DirectCallNode.create(target);
-
-            @Override
-            public Object execute(VirtualFrame frame) {
-                Object ret = call.call();
-                return new SulongNFILibrary(ret);
-            }
-        });
-    }
-
     @Override
     protected CallTarget parse(ParsingRequest request) {
-        return Truffle.getRuntime().createCallTarget(new RootNode(this) {
+        return new RootNode(this) {
 
             @Override
             public Object execute(VirtualFrame frame) {
                 throw CompilerDirectives.shouldNotReachHere("illegal access to internal language");
             }
-        });
+        }.getCallTarget();
     }
 
     @Override
     protected boolean isThreadAccessAllowed(Thread thread, boolean singleThreaded) {
         return true;
+    }
+
+    private static final LanguageReference<SulongNFI> REFERENCE = LanguageReference.create(SulongNFI.class);
+
+    static SulongNFI get(Node node) {
+        return REFERENCE.get(node);
+    }
+
+    private static final ContextReference<Env> CONTEXT_REFERENCE = ContextReference.create(SulongNFI.class);
+
+    static Env getContext(Node node) {
+        return CONTEXT_REFERENCE.get(node);
     }
 }

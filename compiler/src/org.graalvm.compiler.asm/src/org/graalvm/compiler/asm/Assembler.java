@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2009, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -44,7 +44,7 @@ public abstract class Assembler {
     public abstract static class CodeAnnotation {
     }
 
-    public final TargetDescription target;
+    private final TargetDescription target;
     private List<LabelHint> jumpDisplacementHints;
 
     /**
@@ -297,5 +297,21 @@ public abstract class Assembler {
         String[] getSupportedInstructionTypes();
 
         int[] countInstructions(String[] instructionTypes, int beginPc, int endPc);
+    }
+
+    public boolean isTargetMP() {
+        return target.isMP;
+    }
+
+    public int getReturnAddressSize() {
+        return target.arch.getReturnAddressSize();
+    }
+
+    public int getMachineCodeCallDisplacementOffset() {
+        return target.arch.getMachineCodeCallDisplacementOffset();
+    }
+
+    public boolean inlineObjects() {
+        return target.inlineObjects;
     }
 }

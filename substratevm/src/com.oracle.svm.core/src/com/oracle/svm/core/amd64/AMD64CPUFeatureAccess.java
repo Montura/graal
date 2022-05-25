@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -28,31 +28,19 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 
-import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 import org.graalvm.nativeimage.StackValue;
 import org.graalvm.nativeimage.c.struct.SizeOf;
-import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.word.Pointer;
 
 import com.oracle.svm.core.CPUFeatureAccess;
 import com.oracle.svm.core.CalleeSavedRegisters;
 import com.oracle.svm.core.UnmanagedMemoryUtil;
-import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.util.VMError;
 
 import jdk.vm.ci.amd64.AMD64;
 import jdk.vm.ci.code.Architecture;
-
-@AutomaticFeature
-@Platforms(Platform.AMD64.class)
-class AMD64CPUFeatureAccessFeature implements Feature {
-    @Override
-    public void afterRegistration(AfterRegistrationAccess access) {
-        ImageSingletons.add(CPUFeatureAccess.class, new AMD64CPUFeatureAccess());
-    }
-}
 
 public class AMD64CPUFeatureAccess implements CPUFeatureAccess {
 
@@ -72,7 +60,7 @@ public class AMD64CPUFeatureAccess implements CPUFeatureAccess {
      * the CPUFeatures available vary across different JDK versions, the features are queried via
      * their name, as opposed to the actual enum.
      */
-    private static boolean isFeaturePresent(String featureName, AMD64LibCHelper.CPUFeatures cpuFeatures) {
+    private static boolean isFeaturePresent(String featureName, AMD64LibCHelper.CPUFeatures cpuFeatures, List<String> unknownFeatures) {
         switch (featureName) {
             case "CX8":
                 return cpuFeatures.fCX8();
@@ -108,6 +96,8 @@ public class AMD64CPUFeatureAccess implements CPUFeatureAccess {
                 return cpuFeatures.fTSC();
             case "TSCINV":
                 return cpuFeatures.fTSCINV();
+            case "TSCINV_BIT":
+                return cpuFeatures.fTSCINVBIT();
             case "AVX":
                 return cpuFeatures.fAVX();
             case "AVX2":
@@ -144,13 +134,37 @@ public class AMD64CPUFeatureAccess implements CPUFeatureAccess {
                 return cpuFeatures.fSHA();
             case "FMA":
                 return cpuFeatures.fFMA();
+            case "VZEROUPPER":
+                return cpuFeatures.fVZEROUPPER();
+            case "AVX512_VPOPCNTDQ":
+                return cpuFeatures.fAVX512VPOPCNTDQ();
+            case "AVX512_VPCLMULQDQ":
+                return cpuFeatures.fAVX512VPCLMULQDQ();
+            case "AVX512_VAES":
+                return cpuFeatures.fAVX512VAES();
+            case "AVX512_VNNI":
+                return cpuFeatures.fAVX512VNNI();
+            case "FLUSH":
+                return cpuFeatures.fFLUSH();
+            case "FLUSHOPT":
+                return cpuFeatures.fFLUSHOPT();
+            case "CLWB":
+                return cpuFeatures.fCLWB();
+            case "AVX512_VBMI2":
+                return cpuFeatures.fAVX512VBMI2();
+            case "AVX512_VBMI":
+                return cpuFeatures.fAVX512VBMI();
+            case "HV":
+                return cpuFeatures.fHV();
             default:
-                throw VMError.shouldNotReachHere("Missing feature check: " + featureName);
+                unknownFeatures.add(featureName);
+                return false;
         }
     }
 
+    @Override
     @Platforms(Platform.AMD64.class)
-    public static EnumSet<AMD64.CPUFeature> determineHostCPUFeatures() {
+    public EnumSet<AMD64.CPUFeature> determineHostCPUFeatures() {
         EnumSet<AMD64.CPUFeature> features = EnumSet.noneOf(AMD64.CPUFeature.class);
 
         AMD64LibCHelper.CPUFeatures cpuFeatures = StackValue.get(AMD64LibCHelper.CPUFeatures.class);
@@ -159,10 +173,14 @@ public class AMD64CPUFeatureAccess implements CPUFeatureAccess {
 
         AMD64LibCHelper.determineCPUFeatures(cpuFeatures);
 
+        ArrayList<String> unknownFeatures = new ArrayList<>();
         for (AMD64.CPUFeature feature : AMD64.CPUFeature.values()) {
-            if (isFeaturePresent(feature.name(), cpuFeatures)) {
+            if (isFeaturePresent(feature.name(), cpuFeatures, unknownFeatures)) {
                 features.add(feature);
             }
+        }
+        if (!unknownFeatures.isEmpty()) {
+            throw VMError.shouldNotReachHere("Native image does not support the following JVMCI CPU features: " + unknownFeatures);
         }
         return features;
     }

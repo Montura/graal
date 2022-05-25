@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -42,6 +42,7 @@ import org.graalvm.compiler.core.common.cfg.BlockMap;
 import org.graalvm.compiler.debug.CounterKey;
 import org.graalvm.compiler.debug.DebugContext;
 import org.graalvm.compiler.debug.Indent;
+import org.graalvm.compiler.lir.CastValue;
 import org.graalvm.compiler.lir.InstructionValueConsumer;
 import org.graalvm.compiler.lir.LIR;
 import org.graalvm.compiler.lir.LIRInsertionBuffer;
@@ -352,7 +353,14 @@ public final class ConstantLoadOptimization extends PreAllocationOptimizationPha
             debug.log("new move (%s) and inserted in block %s", move, block);
             // update usages
             for (UseEntry u : usages) {
-                u.setValue(variable);
+                AllocatableValue newValue;
+                if (u.getValue() instanceof CastValue) {
+                    ValueKind<?> castKind = variable.getValueKind().changeType(u.getValue().getPlatformKind());
+                    newValue = new CastValue(castKind, variable);
+                } else {
+                    newValue = variable;
+                }
+                u.setValue(newValue);
                 debug.log("patched instruction %s", u.getInstruction());
             }
         }

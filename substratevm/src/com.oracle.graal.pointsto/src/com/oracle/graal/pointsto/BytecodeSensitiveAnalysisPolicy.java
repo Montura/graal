@@ -36,6 +36,10 @@ import com.oracle.graal.pointsto.api.PointstoOptions;
 import com.oracle.graal.pointsto.flow.AbstractSpecialInvokeTypeFlow;
 import com.oracle.graal.pointsto.flow.AbstractVirtualInvokeTypeFlow;
 import com.oracle.graal.pointsto.flow.ActualReturnTypeFlow;
+import com.oracle.graal.pointsto.flow.ArrayElementsTypeFlow;
+import com.oracle.graal.pointsto.flow.CloneTypeFlow;
+import com.oracle.graal.pointsto.flow.ContextInsensitiveFieldTypeFlow;
+import com.oracle.graal.pointsto.flow.FieldTypeFlow;
 import com.oracle.graal.pointsto.flow.MethodFlowsGraph;
 import com.oracle.graal.pointsto.flow.MethodTypeFlow;
 import com.oracle.graal.pointsto.flow.TypeFlow;
@@ -48,6 +52,7 @@ import com.oracle.graal.pointsto.meta.AnalysisField;
 import com.oracle.graal.pointsto.meta.AnalysisMethod;
 import com.oracle.graal.pointsto.meta.AnalysisType;
 import com.oracle.graal.pointsto.meta.AnalysisUniverse;
+import com.oracle.graal.pointsto.meta.PointsToAnalysisMethod;
 import com.oracle.graal.pointsto.typestate.TypeState;
 import com.oracle.graal.pointsto.typestate.TypeState.TypesObjectsIterator;
 import com.oracle.graal.pointsto.typestore.ArrayElementsTypeStore;
@@ -92,29 +97,29 @@ public class BytecodeSensitiveAnalysisPolicy extends AnalysisPolicy {
     }
 
     @Override
-    public void noteMerge(BigBang bb, TypeState t) {
+    public void noteMerge(PointsToAnalysis bb, TypeState t) {
         t.noteMerge(bb);
     }
 
     @Override
-    public void noteMerge(BigBang bb, AnalysisObject... a) {
+    public void noteMerge(PointsToAnalysis bb, AnalysisObject... a) {
         for (AnalysisObject o : a) {
             o.noteMerge(bb);
         }
     }
 
     @Override
-    public void noteMerge(BigBang bb, AnalysisObject o) {
+    public void noteMerge(PointsToAnalysis bb, AnalysisObject o) {
         o.noteMerge(bb);
     }
 
     @Override
-    public boolean isContextSensitiveAllocation(BigBang bb, AnalysisType type, AnalysisContext allocationContext) {
+    public boolean isContextSensitiveAllocation(PointsToAnalysis bb, AnalysisType type, AnalysisContext allocationContext) {
         return bb.trackConcreteAnalysisObjects(type);
     }
 
     @Override
-    public AnalysisObject createHeapObject(BigBang bb, AnalysisType type, BytecodeLocation allocationSite, AnalysisContext allocationContext) {
+    public AnalysisObject createHeapObject(PointsToAnalysis bb, AnalysisType type, BytecodeLocation allocationSite, AnalysisContext allocationContext) {
         assert PointstoOptions.AllocationSiteSensitiveHeap.getValue(options);
         if (isContextSensitiveAllocation(bb, type, allocationContext)) {
             return new AllocationContextSensitiveObject(bb, type, allocationSite, allocationContext);
@@ -124,7 +129,7 @@ public class BytecodeSensitiveAnalysisPolicy extends AnalysisPolicy {
     }
 
     @Override
-    public AnalysisObject createConstantObject(BigBang bb, JavaConstant constant, AnalysisType exactType) {
+    public AnalysisObject createConstantObject(PointsToAnalysis bb, JavaConstant constant, AnalysisType exactType) {
         /* Get the analysis object wrapping the JavaConstant. */
         if (bb.trackConcreteAnalysisObjects(exactType)) {
             return exactType.getCachedConstantObject(bb, constant);
@@ -134,7 +139,87 @@ public class BytecodeSensitiveAnalysisPolicy extends AnalysisPolicy {
     }
 
     @Override
-    public BytecodeLocation createAllocationSite(BigBang bb, int bci, AnalysisMethod method) {
+    public TypeState dynamicNewInstanceState(PointsToAnalysis bb, TypeState currentState, TypeState newState, BytecodeLocation allocationSite, AnalysisContext allocationContext) {
+        /* Generate a heap object for every new incoming type. */
+        TypeState resultState = TypeState.forEmpty();
+        for (AnalysisType type : newState.types(bb)) {
+            if (!currentState.containsType(type)) {
+                TypeState typeState = TypeState.forAllocation(bb, allocationSite, type, allocationContext);
+                resultState = TypeState.forUnion(bb, resultState, typeState);
+            }
+        }
+        assert !resultState.canBeNull();
+        return resultState;
+    }
+
+    @Override
+    public TypeState cloneState(PointsToAnalysis bb, TypeState currentState, TypeState inputState, BytecodeLocation cloneSite, AnalysisContext allocationContext) {
+        TypeState resultState;
+        if (inputState.isEmpty() || inputState.isNull()) {
+            /* Nothing to be cloned if the input state is not a concrete type state. */
+            resultState = inputState.forNonNull(bb);
+        } else {
+            resultState = TypeState.forEmpty();
+            for (AnalysisType type : inputState.types(bb)) {
+                if (!currentState.containsType(type)) {
+                    TypeState typeState = TypeState.forClone(bb, cloneSite, type, allocationContext);
+                    resultState = TypeState.forUnion(bb, resultState, typeState);
+                }
+            }
+        }
+        assert !resultState.canBeNull();
+        return resultState;
+    }
+
+    @Override
+    public void linkClonedObjects(PointsToAnalysis bb, TypeFlow<?> inputFlow, CloneTypeFlow cloneFlow, BytecodePosition source) {
+        TypeState inputState = inputFlow.getState();
+        TypeState cloneState = cloneFlow.getState();
+
+        for (AnalysisType type : inputState.types(bb)) {
+            if (type.isArray()) {
+                if (bb.analysisPolicy().aliasArrayTypeFlows()) {
+                    /* All arrays are aliased, no need to model the array clone operation. */
+                    continue;
+                }
+
+                /* The object array clones must also get the elements flows of the originals. */
+                for (AnalysisObject originalObject : inputState.objects(type)) {
+                    if (originalObject.isPrimitiveArray() || originalObject.isEmptyObjectArrayConstant(bb)) {
+                        /* Nothing to read from a primitive array or an empty array constant. */
+                        continue;
+                    }
+                    ArrayElementsTypeFlow originalObjectElementsFlow = originalObject.getArrayElementsFlow(bb, false);
+
+                    for (AnalysisObject cloneObject : cloneState.objects(type)) {
+                        if (cloneObject.isPrimitiveArray() || cloneObject.isEmptyObjectArrayConstant(bb)) {
+                            /* Cannot write to a primitive array or an empty array constant. */
+                            continue;
+                        }
+                        ArrayElementsTypeFlow cloneObjectElementsFlow = cloneObject.getArrayElementsFlow(bb, true);
+                        originalObjectElementsFlow.addUse(bb, cloneObjectElementsFlow);
+                    }
+                }
+            } else {
+
+                /* The object clones must get field flows of the originals. */
+                for (AnalysisObject originalObject : inputState.objects(type)) {
+                    /* Link all the field flows of the original to the clone. */
+                    for (AnalysisField field : type.getInstanceFields(true)) {
+                        FieldTypeFlow originalObjectFieldFlow = originalObject.getInstanceFieldFlow(bb, inputFlow, source, field, false);
+
+                        for (AnalysisObject cloneObject : cloneState.objects(type)) {
+                            FieldTypeFlow cloneObjectFieldFlow = cloneObject.getInstanceFieldFlow(bb, cloneFlow, source, field, true);
+                            originalObjectFieldFlow.addUse(bb, cloneObjectFieldFlow);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Override
+    public BytecodeLocation createAllocationSite(PointsToAnalysis bb, int bci, AnalysisMethod method) {
         return BytecodeLocation.create(bci, method);
     }
 
@@ -142,7 +227,25 @@ public class BytecodeSensitiveAnalysisPolicy extends AnalysisPolicy {
     public FieldTypeStore createFieldTypeStore(AnalysisObject object, AnalysisField field, AnalysisUniverse universe) {
         assert PointstoOptions.AllocationSiteSensitiveHeap.getValue(options);
         if (object.isContextInsensitiveObject()) {
-            return new SplitFieldTypeStore(field, object);
+            /*
+             * Write flow is context-sensitive and read flow is context-insensitive. This split is
+             * used to model context sensitivity and context merging for fields of this
+             * context-insensitive object, and the interaction with the fields of context-sensitive
+             * objects of the same type.
+             * 
+             * All values written to fields of context-sensitive receivers are also reflected to the
+             * context-insensitive receiver *read* flow, but without any context information, such
+             * that all the reads from the fields of the context insensitive object reflect all the
+             * types written to the context-sensitive ones, but without triggering merging.
+             * 
+             * Once the context-sensitive receiver object is marked as merged, i.e., it looses its
+             * context sensitivity, the field flows are routed to the context-insensitive receiver
+             * *write* flow, thus triggering their merging. See ContextSensitiveAnalysisObject.
+             * mergeInstanceFieldFlow().
+             */
+            FieldTypeFlow writeFlow = new FieldTypeFlow(field, field.getType(), object);
+            ContextInsensitiveFieldTypeFlow readFlow = new ContextInsensitiveFieldTypeFlow(field, field.getType(), object);
+            return new SplitFieldTypeStore(field, object, writeFlow, readFlow);
         } else {
             return new UnifiedFieldTypeStore(field, object);
         }
@@ -175,13 +278,13 @@ public class BytecodeSensitiveAnalysisPolicy extends AnalysisPolicy {
     }
 
     @Override
-    public AbstractVirtualInvokeTypeFlow createVirtualInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, AnalysisMethod targetMethod,
+    public AbstractVirtualInvokeTypeFlow createVirtualInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, PointsToAnalysisMethod targetMethod,
                     TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, BytecodeLocation location) {
         return new BytecodeSensitiveVirtualInvokeTypeFlow(invokeLocation, receiverType, targetMethod, actualParameters, actualReturn, location);
     }
 
     @Override
-    public AbstractSpecialInvokeTypeFlow createSpecialInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, AnalysisMethod targetMethod,
+    public AbstractSpecialInvokeTypeFlow createSpecialInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, PointsToAnalysisMethod targetMethod,
                     TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, BytecodeLocation location) {
         return new BytecodeSensitiveSpecialInvokeTypeFlow(invokeLocation, receiverType, targetMethod, actualParameters, actualReturn, location);
     }
@@ -203,26 +306,26 @@ public class BytecodeSensitiveAnalysisPolicy extends AnalysisPolicy {
         private final ConcurrentMap<MethodFlowsGraph, Object> calleesFlows;
         private final AnalysisContext callerContext;
 
-        protected BytecodeSensitiveVirtualInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, AnalysisMethod targetMethod,
+        protected BytecodeSensitiveVirtualInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, PointsToAnalysisMethod targetMethod,
                         TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, BytecodeLocation location) {
             super(invokeLocation, receiverType, targetMethod, actualParameters, actualReturn, location);
             calleesFlows = null;
             callerContext = null;
         }
 
-        protected BytecodeSensitiveVirtualInvokeTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, BytecodeSensitiveVirtualInvokeTypeFlow original) {
+        protected BytecodeSensitiveVirtualInvokeTypeFlow(PointsToAnalysis bb, MethodFlowsGraph methodFlows, BytecodeSensitiveVirtualInvokeTypeFlow original) {
             super(bb, methodFlows, original);
             calleesFlows = new ConcurrentHashMap<>(4, 0.75f, 1);
             callerContext = methodFlows.context();
         }
 
         @Override
-        public TypeFlow<BytecodePosition> copy(BigBang bb, MethodFlowsGraph methodFlows) {
+        public TypeFlow<BytecodePosition> copy(PointsToAnalysis bb, MethodFlowsGraph methodFlows) {
             return new BytecodeSensitiveVirtualInvokeTypeFlow(bb, methodFlows, this);
         }
 
         @Override
-        public void onObservedUpdate(BigBang bb) {
+        public void onObservedUpdate(PointsToAnalysis bb) {
             assert this.isClone();
 
             /*
@@ -230,10 +333,6 @@ public class BytecodeSensitiveAnalysisPolicy extends AnalysisPolicy {
              * immutable and a later call to getState() can yield a different value.
              */
             TypeState receiverState = getReceiver().getState();
-            if (receiverState.isUnknown()) {
-                bb.reportIllegalUnknownUse(graphRef.getMethod(), source, "Illegal: Invoke on UnknownTypeState objects. Invoke: " + this);
-                return;
-            }
             receiverState = filterReceiverState(bb, receiverState);
 
             /* Use the tandem types - objects iterator. */
@@ -247,12 +346,16 @@ public class BytecodeSensitiveAnalysisPolicy extends AnalysisPolicy {
                      * Type states can be conservative, i.e., we can have receiver types that do not
                      * implement the method. Just ignore such types.
                      */
+                    while (toi.hasNextObject(type)) {
+                        // skip the rest of the objects of the same type
+                        toi.nextObject(type);
+                    }
                     continue;
                 }
 
                 assert !Modifier.isAbstract(method.getModifiers());
 
-                MethodTypeFlow callee = method.getTypeFlow();
+                MethodTypeFlow callee = PointsToAnalysis.assertPointsToAnalysisMethod(method).getTypeFlow();
 
                 while (toi.hasNextObject(type)) {
                     AnalysisObject actualReceiverObject = toi.nextObject(type);
@@ -276,7 +379,14 @@ public class BytecodeSensitiveAnalysisPolicy extends AnalysisPolicy {
         }
 
         @Override
-        public Collection<MethodFlowsGraph> getCalleesFlows(BigBang bb) {
+        public void onObservedSaturated(PointsToAnalysis bb, TypeFlow<?> observed) {
+            assert this.isClone();
+            /* When the receiver flow saturates start observing the flow of the receiver type. */
+            replaceObservedWith(bb, receiverType);
+        }
+
+        @Override
+        public Collection<MethodFlowsGraph> getCalleesFlows(PointsToAnalysis bb) {
             return new ArrayList<>(calleesFlows.keySet());
         }
     }
@@ -288,24 +398,24 @@ public class BytecodeSensitiveAnalysisPolicy extends AnalysisPolicy {
          */
         private ConcurrentMap<MethodFlowsGraph, Object> calleesFlows;
 
-        BytecodeSensitiveSpecialInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, AnalysisMethod targetMethod,
+        BytecodeSensitiveSpecialInvokeTypeFlow(BytecodePosition invokeLocation, AnalysisType receiverType, PointsToAnalysisMethod targetMethod,
                         TypeFlow<?>[] actualParameters, ActualReturnTypeFlow actualReturn, BytecodeLocation location) {
             super(invokeLocation, receiverType, targetMethod, actualParameters, actualReturn, location);
         }
 
-        private BytecodeSensitiveSpecialInvokeTypeFlow(BigBang bb, MethodFlowsGraph methodFlows, BytecodeSensitiveSpecialInvokeTypeFlow original) {
+        private BytecodeSensitiveSpecialInvokeTypeFlow(PointsToAnalysis bb, MethodFlowsGraph methodFlows, BytecodeSensitiveSpecialInvokeTypeFlow original) {
             super(bb, methodFlows, original);
             calleesFlows = new ConcurrentHashMap<>(4, 0.75f, 1);
         }
 
         @Override
-        public TypeFlow<BytecodePosition> copy(BigBang bb, MethodFlowsGraph methodFlows) {
+        public TypeFlow<BytecodePosition> copy(PointsToAnalysis bb, MethodFlowsGraph methodFlows) {
             return new BytecodeSensitiveSpecialInvokeTypeFlow(bb, methodFlows, this);
         }
 
         @Override
-        public void onObservedUpdate(BigBang bb) {
-            assert this.isClone();
+        public void onObservedUpdate(PointsToAnalysis bb) {
+            assert this.isClone() || this.isContextInsensitive();
             /* The receiver state has changed. Process the invoke. */
 
             initCallee();
@@ -324,7 +434,7 @@ public class BytecodeSensitiveAnalysisPolicy extends AnalysisPolicy {
         }
 
         @Override
-        public Collection<MethodFlowsGraph> getCalleesFlows(BigBang bb) {
+        public Collection<MethodFlowsGraph> getCalleesFlows(PointsToAnalysis bb) {
             return new ArrayList<>(calleesFlows.keySet());
         }
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,8 +22,8 @@
  */
 package com.oracle.truffle.espresso.nodes.helper;
 
+import com.oracle.truffle.api.dsl.Bind;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.CachedContext;
 import com.oracle.truffle.api.dsl.Specialization;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.interop.InteropLibrary;
@@ -33,7 +33,7 @@ import com.oracle.truffle.api.interop.UnsupportedTypeException;
 import com.oracle.truffle.api.library.CachedLibrary;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.profiles.BranchProfile;
-import com.oracle.truffle.espresso.EspressoLanguage;
+import com.oracle.truffle.espresso.impl.ContextAccess;
 import com.oracle.truffle.espresso.impl.Field;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.meta.EspressoError;
@@ -44,19 +44,29 @@ import com.oracle.truffle.espresso.nodes.interop.ToEspressoNode;
 import com.oracle.truffle.espresso.runtime.EspressoContext;
 import com.oracle.truffle.espresso.runtime.StaticObject;
 
-public abstract class AbstractGetFieldNode extends Node {
+public abstract class AbstractGetFieldNode extends Node implements ContextAccess {
     final Field field;
+
     final String fieldName;
     final int slotCount;
     static final int CACHED_LIBRARY_LIMIT = 3;
 
     AbstractGetFieldNode(Field field) {
         this.field = field;
-        this.fieldName = field.getNameAsString();
-        this.slotCount = field.getKind().getSlotCount();
+        this.fieldName = getField().getNameAsString();
+        this.slotCount = getField().getKind().getSlotCount();
     }
 
-    public abstract int getField(VirtualFrame frame, long[] primitives, Object[] refs, BytecodeNode root, StaticObject receiver, int at, int statementIndex);
+    @Override
+    public final EspressoContext getContext() {
+        return EspressoContext.get(this);
+    }
+
+    Field getField() {
+        return field;
+    }
+
+    public abstract int getField(VirtualFrame frame, BytecodeNode root, StaticObject receiver, int at, int statementIndex);
 
     public static AbstractGetFieldNode create(Field f) {
         // @formatter:off
@@ -77,15 +87,15 @@ public abstract class AbstractGetFieldNode extends Node {
     }
 
     protected Object getForeignField(StaticObject receiver, InteropLibrary interopLibrary, EspressoContext context, BranchProfile error) {
-        assert field.getDeclaringKlass().isAssignableFrom(receiver.getKlass());
-        assert !field.isStatic();
+        assert getField().getDeclaringKlass().isAssignableFrom(receiver.getKlass());
+        assert !getField().isStatic();
         Object value;
         try {
             value = interopLibrary.readMember(receiver.rawForeignObject(), fieldName);
         } catch (UnsupportedMessageException | UnknownIdentifierException e) {
             error.enter();
             Meta meta = context.getMeta();
-            throw meta.throwExceptionWithMessage(meta.java_lang_NoSuchFieldError, "Foreign object has no readable field " + fieldName);
+            throw meta.throwExceptionWithMessage(meta.java_lang_NoSuchFieldError, "Foreign object has no readable field %s", fieldName);
         }
         return value;
     }
@@ -98,9 +108,9 @@ abstract class IntGetFieldNode extends AbstractGetFieldNode {
     }
 
     @Override
-    public int getField(VirtualFrame frame, long[] primitives, Object[] refs, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
-        root.notifyFieldAccess(frame, statementIndex, field, receiver);
-        BytecodeNode.putInt(primitives, at, executeGetField(receiver));
+    public int getField(VirtualFrame frame, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
+        root.notifyFieldAccess(frame, statementIndex, getField(), receiver);
+        BytecodeNode.putInt(frame, at, executeGetField(receiver));
         return slotCount;
     }
 
@@ -108,13 +118,13 @@ abstract class IntGetFieldNode extends AbstractGetFieldNode {
 
     @Specialization(guards = "receiver.isEspressoObject()")
     int doEspresso(StaticObject receiver) {
-        return field.getInt(receiver);
+        return getField().getInt(receiver);
     }
 
     @Specialization(guards = {"receiver.isForeignObject()", "isValueField(context)"})
     int doForeignValue(StaticObject receiver,
                     @CachedLibrary(limit = "CACHED_LIBRARY_LIMIT") InteropLibrary interopLibrary,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         try {
             return interopLibrary.asInt(receiver.rawForeignObject());
@@ -128,7 +138,7 @@ abstract class IntGetFieldNode extends AbstractGetFieldNode {
     @Specialization(guards = {"receiver.isForeignObject()", "!isValueField(context)"}, limit = "CACHED_LIBRARY_LIMIT")
     int doForeign(StaticObject receiver, @CachedLibrary("receiver.rawForeignObject()") InteropLibrary interopLibrary,
                     @Cached ToEspressoNode toEspressoNode,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         Object value = getForeignField(receiver, interopLibrary, context, error);
         try {
@@ -136,12 +146,12 @@ abstract class IntGetFieldNode extends AbstractGetFieldNode {
         } catch (UnsupportedTypeException e) {
             error.enter();
             Meta meta = context.getMeta();
-            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field " + fieldName + " cannot be cast to int");
+            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field %s cannot be cast to int", fieldName);
         }
     }
 
     boolean isValueField(EspressoContext context) {
-        return field == context.getMeta().java_lang_Integer_value;
+        return getField() == context.getMeta().java_lang_Integer_value;
     }
 }
 
@@ -152,9 +162,9 @@ abstract class BooleanGetFieldNode extends AbstractGetFieldNode {
     }
 
     @Override
-    public int getField(VirtualFrame frame, long[] primitives, Object[] refs, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
-        root.notifyFieldAccess(frame, statementIndex, field, receiver);
-        BytecodeNode.putInt(primitives, at, executeGetField(receiver) ? 1 : 0);
+    public int getField(VirtualFrame frame, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
+        root.notifyFieldAccess(frame, statementIndex, getField(), receiver);
+        BytecodeNode.putInt(frame, at, executeGetField(receiver) ? 1 : 0);
         return slotCount;
     }
 
@@ -162,13 +172,13 @@ abstract class BooleanGetFieldNode extends AbstractGetFieldNode {
 
     @Specialization(guards = "receiver.isEspressoObject()")
     boolean doEspresso(StaticObject receiver) {
-        return field.getBoolean(receiver);
+        return getField().getBoolean(receiver);
     }
 
     @Specialization(guards = {"receiver.isForeignObject()", "isValueField(context)"})
     boolean doForeignValue(StaticObject receiver,
                     @CachedLibrary(limit = "CACHED_LIBRARY_LIMIT") InteropLibrary interopLibrary,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         try {
             return interopLibrary.asBoolean(receiver.rawForeignObject());
@@ -182,7 +192,7 @@ abstract class BooleanGetFieldNode extends AbstractGetFieldNode {
     @Specialization(guards = {"receiver.isForeignObject()", "!isValueField(context)"}, limit = "CACHED_LIBRARY_LIMIT")
     boolean doForeign(StaticObject receiver, @CachedLibrary("receiver.rawForeignObject()") InteropLibrary interopLibrary,
                     @Cached ToEspressoNode toEspressoNode,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         Object value = getForeignField(receiver, interopLibrary, context, error);
         try {
@@ -190,12 +200,12 @@ abstract class BooleanGetFieldNode extends AbstractGetFieldNode {
         } catch (UnsupportedTypeException e) {
             error.enter();
             Meta meta = context.getMeta();
-            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field " + fieldName + " cannot be cast to boolean");
+            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field %s cannot be cast to boolean", fieldName);
         }
     }
 
     boolean isValueField(EspressoContext context) {
-        return field == context.getMeta().java_lang_Boolean_value;
+        return getField() == context.getMeta().java_lang_Boolean_value;
     }
 }
 
@@ -206,9 +216,9 @@ abstract class CharGetFieldNode extends AbstractGetFieldNode {
     }
 
     @Override
-    public int getField(VirtualFrame frame, long[] primitives, Object[] refs, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
-        root.notifyFieldAccess(frame, statementIndex, field, receiver);
-        BytecodeNode.putInt(primitives, at, executeGetField(receiver));
+    public int getField(VirtualFrame frame, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
+        root.notifyFieldAccess(frame, statementIndex, getField(), receiver);
+        BytecodeNode.putInt(frame, at, executeGetField(receiver));
         return slotCount;
     }
 
@@ -216,13 +226,13 @@ abstract class CharGetFieldNode extends AbstractGetFieldNode {
 
     @Specialization(guards = "receiver.isEspressoObject()")
     char doEspresso(StaticObject receiver) {
-        return field.getChar(receiver);
+        return getField().getChar(receiver);
     }
 
     @Specialization(guards = {"receiver.isForeignObject()", "isValueField(context)"})
     char doForeignValue(StaticObject receiver,
                     @CachedLibrary(limit = "CACHED_LIBRARY_LIMIT") InteropLibrary interopLibrary,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         try {
             String foreignString = interopLibrary.asString(receiver.rawForeignObject());
@@ -242,7 +252,7 @@ abstract class CharGetFieldNode extends AbstractGetFieldNode {
     @Specialization(guards = {"receiver.isForeignObject()", "!isValueField(context)"}, limit = "CACHED_LIBRARY_LIMIT")
     char doForeign(StaticObject receiver, @CachedLibrary("receiver.rawForeignObject()") InteropLibrary interopLibrary,
                     @Cached ToEspressoNode toEspressoNode,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         Object value = getForeignField(receiver, interopLibrary, context, error);
         try {
@@ -250,12 +260,12 @@ abstract class CharGetFieldNode extends AbstractGetFieldNode {
         } catch (UnsupportedTypeException e) {
             error.enter();
             Meta meta = context.getMeta();
-            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field " + fieldName + " cannot be cast to char");
+            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field %s cannot be cast to char", fieldName);
         }
     }
 
     boolean isValueField(EspressoContext context) {
-        return field == context.getMeta().java_lang_Character_value;
+        return getField() == context.getMeta().java_lang_Character_value;
     }
 }
 
@@ -266,9 +276,9 @@ abstract class ShortGetFieldNode extends AbstractGetFieldNode {
     }
 
     @Override
-    public int getField(VirtualFrame frame, long[] primitives, Object[] refs, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
-        root.notifyFieldAccess(frame, statementIndex, field, receiver);
-        BytecodeNode.putInt(primitives, at, executeGetField(receiver));
+    public int getField(VirtualFrame frame, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
+        root.notifyFieldAccess(frame, statementIndex, getField(), receiver);
+        BytecodeNode.putInt(frame, at, executeGetField(receiver));
         return slotCount;
     }
 
@@ -276,13 +286,13 @@ abstract class ShortGetFieldNode extends AbstractGetFieldNode {
 
     @Specialization(guards = "receiver.isEspressoObject()")
     short doEspresso(StaticObject receiver) {
-        return field.getShort(receiver);
+        return getField().getShort(receiver);
     }
 
     @Specialization(guards = {"receiver.isForeignObject()", "isValueField(context)"})
     short doForeignValue(StaticObject receiver,
                     @CachedLibrary(limit = "CACHED_LIBRARY_LIMIT") InteropLibrary interopLibrary,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         try {
             return interopLibrary.asShort(receiver.rawForeignObject());
@@ -296,7 +306,7 @@ abstract class ShortGetFieldNode extends AbstractGetFieldNode {
     @Specialization(guards = {"receiver.isForeignObject()", "!isValueField(context)"}, limit = "CACHED_LIBRARY_LIMIT")
     short doForeign(StaticObject receiver, @CachedLibrary("receiver.rawForeignObject()") InteropLibrary interopLibrary,
                     @Cached ToEspressoNode toEspressoNode,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         Object value = getForeignField(receiver, interopLibrary, context, error);
         try {
@@ -304,12 +314,12 @@ abstract class ShortGetFieldNode extends AbstractGetFieldNode {
         } catch (UnsupportedTypeException e) {
             error.enter();
             Meta meta = context.getMeta();
-            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field " + fieldName + " cannot be cast to short");
+            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field %s cannot be cast to short", fieldName);
         }
     }
 
     boolean isValueField(EspressoContext context) {
-        return field == context.getMeta().java_lang_Short_value;
+        return getField() == context.getMeta().java_lang_Short_value;
     }
 }
 
@@ -320,9 +330,9 @@ abstract class ByteGetFieldNode extends AbstractGetFieldNode {
     }
 
     @Override
-    public int getField(VirtualFrame frame, long[] primitives, Object[] refs, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
-        root.notifyFieldAccess(frame, statementIndex, field, receiver);
-        BytecodeNode.putInt(primitives, at, executeGetField(receiver));
+    public int getField(VirtualFrame frame, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
+        root.notifyFieldAccess(frame, statementIndex, getField(), receiver);
+        BytecodeNode.putInt(frame, at, executeGetField(receiver));
         return slotCount;
     }
 
@@ -330,13 +340,13 @@ abstract class ByteGetFieldNode extends AbstractGetFieldNode {
 
     @Specialization(guards = "receiver.isEspressoObject()")
     byte doEspresso(StaticObject receiver) {
-        return field.getByte(receiver);
+        return getField().getByte(receiver);
     }
 
     @Specialization(guards = {"receiver.isForeignObject()", "isValueField(context)"})
     byte doForeignValue(StaticObject receiver,
                     @CachedLibrary(limit = "CACHED_LIBRARY_LIMIT") InteropLibrary interopLibrary,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         try {
             return interopLibrary.asByte(receiver.rawForeignObject());
@@ -350,7 +360,7 @@ abstract class ByteGetFieldNode extends AbstractGetFieldNode {
     @Specialization(guards = {"receiver.isForeignObject()", "!isValueField(context)"}, limit = "CACHED_LIBRARY_LIMIT")
     byte doForeign(StaticObject receiver, @CachedLibrary("receiver.rawForeignObject()") InteropLibrary interopLibrary,
                     @Cached ToEspressoNode toEspressoNode,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         Object value = getForeignField(receiver, interopLibrary, context, error);
         try {
@@ -358,12 +368,12 @@ abstract class ByteGetFieldNode extends AbstractGetFieldNode {
         } catch (UnsupportedTypeException e) {
             error.enter();
             Meta meta = context.getMeta();
-            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field " + fieldName + " cannot be cast to byte");
+            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field %s cannot be cast to byte", fieldName);
         }
     }
 
     boolean isValueField(EspressoContext context) {
-        return field == context.getMeta().java_lang_Byte_value;
+        return getField() == context.getMeta().java_lang_Byte_value;
     }
 }
 
@@ -374,9 +384,9 @@ abstract class LongGetFieldNode extends AbstractGetFieldNode {
     }
 
     @Override
-    public int getField(VirtualFrame frame, long[] primitives, Object[] refs, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
-        root.notifyFieldAccess(frame, statementIndex, field, receiver);
-        BytecodeNode.putLong(primitives, at, executeGetField(receiver));
+    public int getField(VirtualFrame frame, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
+        root.notifyFieldAccess(frame, statementIndex, getField(), receiver);
+        BytecodeNode.putLong(frame, at, executeGetField(receiver));
         return slotCount;
     }
 
@@ -384,13 +394,13 @@ abstract class LongGetFieldNode extends AbstractGetFieldNode {
 
     @Specialization(guards = "receiver.isEspressoObject()")
     long doEspresso(StaticObject receiver) {
-        return field.getLong(receiver);
+        return getField().getLong(receiver);
     }
 
     @Specialization(guards = {"receiver.isForeignObject()", "isValueField(context)"})
     long doForeignValue(StaticObject receiver,
                     @CachedLibrary(limit = "CACHED_LIBRARY_LIMIT") InteropLibrary interopLibrary,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         try {
             return interopLibrary.asLong(receiver.rawForeignObject());
@@ -404,7 +414,7 @@ abstract class LongGetFieldNode extends AbstractGetFieldNode {
     @Specialization(guards = {"receiver.isForeignObject()", "!isValueField(context)"}, limit = "CACHED_LIBRARY_LIMIT")
     long doForeign(StaticObject receiver, @CachedLibrary("receiver.rawForeignObject()") InteropLibrary interopLibrary,
                     @Cached ToEspressoNode toEspressoNode,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         Object value = getForeignField(receiver, interopLibrary, context, error);
         try {
@@ -412,12 +422,12 @@ abstract class LongGetFieldNode extends AbstractGetFieldNode {
         } catch (UnsupportedTypeException e) {
             error.enter();
             Meta meta = context.getMeta();
-            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field " + fieldName + " cannot be cast to long");
+            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field %s cannot be cast to long", fieldName);
         }
     }
 
     boolean isValueField(EspressoContext context) {
-        return field == context.getMeta().java_lang_Long_value;
+        return getField() == context.getMeta().java_lang_Long_value;
     }
 }
 
@@ -428,9 +438,9 @@ abstract class FloatGetFieldNode extends AbstractGetFieldNode {
     }
 
     @Override
-    public int getField(VirtualFrame frame, long[] primitives, Object[] refs, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
-        root.notifyFieldAccess(frame, statementIndex, field, receiver);
-        BytecodeNode.putFloat(primitives, at, executeGetField(receiver));
+    public int getField(VirtualFrame frame, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
+        root.notifyFieldAccess(frame, statementIndex, getField(), receiver);
+        BytecodeNode.putFloat(frame, at, executeGetField(receiver));
         return slotCount;
     }
 
@@ -438,13 +448,13 @@ abstract class FloatGetFieldNode extends AbstractGetFieldNode {
 
     @Specialization(guards = "receiver.isEspressoObject()")
     float doEspresso(StaticObject receiver) {
-        return field.getFloat(receiver);
+        return getField().getFloat(receiver);
     }
 
     @Specialization(guards = {"receiver.isForeignObject()", "isValueField(context)"})
     float doForeignValue(StaticObject receiver,
                     @CachedLibrary(limit = "CACHED_LIBRARY_LIMIT") InteropLibrary interopLibrary,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         try {
             return interopLibrary.asFloat(receiver.rawForeignObject());
@@ -458,7 +468,7 @@ abstract class FloatGetFieldNode extends AbstractGetFieldNode {
     @Specialization(guards = {"receiver.isForeignObject()", "!isValueField(context)"}, limit = "CACHED_LIBRARY_LIMIT")
     float doForeign(StaticObject receiver, @CachedLibrary("receiver.rawForeignObject()") InteropLibrary interopLibrary,
                     @Cached ToEspressoNode toEspressoNode,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         Object value = getForeignField(receiver, interopLibrary, context, error);
         try {
@@ -466,12 +476,12 @@ abstract class FloatGetFieldNode extends AbstractGetFieldNode {
         } catch (UnsupportedTypeException e) {
             error.enter();
             Meta meta = context.getMeta();
-            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field " + fieldName + " cannot be cast to float");
+            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field %s cannot be cast to float", fieldName);
         }
     }
 
     boolean isValueField(EspressoContext context) {
-        return field == context.getMeta().java_lang_Float_value;
+        return getField() == context.getMeta().java_lang_Float_value;
     }
 }
 
@@ -482,9 +492,9 @@ abstract class DoubleGetFieldNode extends AbstractGetFieldNode {
     }
 
     @Override
-    public int getField(VirtualFrame frame, long[] primitives, Object[] refs, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
-        root.notifyFieldAccess(frame, statementIndex, field, receiver);
-        BytecodeNode.putDouble(primitives, at, executeGetField(receiver));
+    public int getField(VirtualFrame frame, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
+        root.notifyFieldAccess(frame, statementIndex, getField(), receiver);
+        BytecodeNode.putDouble(frame, at, executeGetField(receiver));
         return slotCount;
     }
 
@@ -492,13 +502,13 @@ abstract class DoubleGetFieldNode extends AbstractGetFieldNode {
 
     @Specialization(guards = "receiver.isEspressoObject()")
     double doEspresso(StaticObject receiver) {
-        return field.getDouble(receiver);
+        return getField().getDouble(receiver);
     }
 
     @Specialization(guards = {"receiver.isForeignObject()", "isValueField(context)"})
     double doForeignValue(StaticObject receiver,
                     @CachedLibrary(limit = "CACHED_LIBRARY_LIMIT") InteropLibrary interopLibrary,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         try {
             return interopLibrary.asDouble(receiver.rawForeignObject());
@@ -512,7 +522,7 @@ abstract class DoubleGetFieldNode extends AbstractGetFieldNode {
     @Specialization(guards = {"receiver.isForeignObject()", "!isValueField(context)"}, limit = "CACHED_LIBRARY_LIMIT")
     double doForeign(StaticObject receiver, @CachedLibrary("receiver.rawForeignObject()") InteropLibrary interopLibrary,
                     @Cached ToEspressoNode toEspressoNode,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         Object value = getForeignField(receiver, interopLibrary, context, error);
         try {
@@ -520,12 +530,12 @@ abstract class DoubleGetFieldNode extends AbstractGetFieldNode {
         } catch (UnsupportedTypeException e) {
             error.enter();
             Meta meta = context.getMeta();
-            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field " + fieldName + " cannot be cast to double");
+            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field %s cannot be cast to double", fieldName);
         }
     }
 
     boolean isValueField(EspressoContext context) {
-        return field == context.getMeta().java_lang_Double_value;
+        return getField() == context.getMeta().java_lang_Double_value;
     }
 }
 
@@ -539,9 +549,11 @@ abstract class ObjectGetFieldNode extends AbstractGetFieldNode {
     }
 
     @Override
-    public int getField(VirtualFrame frame, long[] primitives, Object[] refs, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
-        root.notifyFieldAccess(frame, statementIndex, field, receiver);
-        BytecodeNode.putObject(refs, at, executeGetField(receiver));
+    public int getField(VirtualFrame frame, BytecodeNode root, StaticObject receiver, int at, int statementIndex) {
+        root.notifyFieldAccess(frame, statementIndex, getField(), receiver);
+        StaticObject result = executeGetField(receiver);
+        root.checkNoForeignObjectAssumption(result);
+        BytecodeNode.putObject(frame, at, result);
         return slotCount;
     }
 
@@ -555,7 +567,7 @@ abstract class ObjectGetFieldNode extends AbstractGetFieldNode {
     @Specialization(guards = "receiver.isForeignObject()", limit = "CACHED_LIBRARY_LIMIT")
     StaticObject doForeign(StaticObject receiver, @CachedLibrary("receiver.rawForeignObject()") InteropLibrary interopLibrary,
                     @Cached ToEspressoNode toEspressoNode,
-                    @CachedContext(EspressoLanguage.class) EspressoContext context,
+                    @Bind("getContext()") EspressoContext context,
                     @Cached BranchProfile error) {
         Object value = getForeignField(receiver, interopLibrary, context, error);
         try {
@@ -563,7 +575,7 @@ abstract class ObjectGetFieldNode extends AbstractGetFieldNode {
         } catch (UnsupportedTypeException e) {
             error.enter();
             Meta meta = context.getMeta();
-            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field " + fieldName + " cannot be cast to " + typeKlass.getNameAsString());
+            throw meta.throwExceptionWithMessage(meta.java_lang_ClassCastException, "Foreign field %s cannot be cast to %s", fieldName, typeKlass.getName());
         }
     }
 }

@@ -65,6 +65,11 @@ public final class EspressoError extends Error {
         throw new EspressoError(cause);
     }
 
+    public static RuntimeException fatal(Object... msg) {
+        CompilerDirectives.transferToInterpreter();
+        throw new EspressoError("fatal: %s", cat(msg));
+    }
+
     public static RuntimeException unexpected(String msg, Throwable cause) {
         CompilerDirectives.transferToInterpreter();
         throw new EspressoError(msg, cause);
@@ -128,7 +133,8 @@ public final class EspressoError extends Error {
         super(cause);
     }
 
-    private static String format(String msg, Object... args) {
+    @TruffleBoundary
+    public static String format(String msg, Object... args) {
         if (args != null) {
             // expand Iterable parameters into a list representation
             for (int i = 0; i < args.length; i++) {

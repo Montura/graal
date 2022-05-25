@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -60,6 +60,7 @@ import org.graalvm.compiler.phases.tiers.Suites;
 import org.graalvm.compiler.runtime.RuntimeProvider;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import jdk.vm.ci.meta.JavaConstant;
@@ -227,6 +228,7 @@ public class WriteBarrierAdditionTest extends HotSpotGraalCompilerTest {
      * is the same as {@link #referenceReferentFieldOffset} which does a barrier if requires it.
      */
     @Test
+    @Ignore("GR-31031")
     public void testReferenceReferent2() throws Exception {
         this.expectedBarriers = config.useG1GC ? 1 : 0;
         test("testReferenceReferent2Snippet", referenceReferentFieldOffset);
@@ -257,6 +259,7 @@ public class WriteBarrierAdditionTest extends HotSpotGraalCompilerTest {
      * subclasses of {@link java.lang.ref.Reference} and does a barrier if requires it.
      */
     @Test
+    @Ignore("GR-31031")
     public void testReferenceReferent4() throws Exception {
         this.expectedBarriers = config.useG1GC ? 1 : 0;
         test("testReferenceReferent4Snippet");
@@ -339,7 +342,7 @@ public class WriteBarrierAdditionTest extends HotSpotGraalCompilerTest {
                         Assert.assertEquals(referentOffset(getMetaAccess()), constDisp.asLong());
                     }
                 }
-                Assert.assertTrue(BarrierType.WEAK_FIELD == read.getBarrierType() || BarrierType.MAYBE_WEAK_FIELD == read.getBarrierType());
+                Assert.assertTrue(BarrierType.WEAK_FIELD == read.getBarrierType() || BarrierType.PHANTOM_FIELD == read.getBarrierType());
                 if (config.useG1GC) {
                     Assert.assertTrue(read.next() instanceof G1ReferentFieldReadBarrier);
                 }

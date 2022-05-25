@@ -24,8 +24,6 @@
  */
 package com.oracle.svm.core.jdk.proxy;
 
-// Checkstyle: allow reflection
-
 import org.graalvm.nativeimage.Platform;
 import org.graalvm.nativeimage.Platforms;
 
@@ -34,14 +32,8 @@ public interface DynamicProxyRegistry {
     @Platforms(Platform.HOSTED_ONLY.class)
     void addProxyClass(Class<?>... interfaces);
 
-    Class<?> getProxyClass(Class<?>... interfaces);
+    Class<?> getProxyClass(ClassLoader loader, Class<?>... interfaces);
 
     boolean isProxyClass(Class<?> clazz);
-
-    @SuppressWarnings("deprecation")
-    @Platforms(Platform.HOSTED_ONLY.class)
-    static Class<?> getProxyClass(ClassLoader loader, Class<?>... interfaces) {
-        return java.lang.reflect.Proxy.getProxyClass(loader, interfaces);
-    }
 
 }

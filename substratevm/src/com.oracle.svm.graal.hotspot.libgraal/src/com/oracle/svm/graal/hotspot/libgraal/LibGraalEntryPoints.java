@@ -25,7 +25,6 @@
 package com.oracle.svm.graal.hotspot.libgraal;
 
 import static jdk.vm.ci.hotspot.HotSpotJVMCIRuntime.runtime;
-import static sun.misc.Unsafe.ARRAY_BYTE_BASE_OFFSET;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
@@ -43,7 +42,6 @@ import org.graalvm.compiler.options.OptionDescriptors;
 import org.graalvm.compiler.options.OptionKey;
 import org.graalvm.compiler.options.OptionValues;
 import org.graalvm.compiler.options.OptionsParser;
-import org.graalvm.compiler.serviceprovider.GraalUnsafeAccess;
 import org.graalvm.compiler.serviceprovider.IsolateUtil;
 import org.graalvm.libgraal.LibGraal;
 import org.graalvm.libgraal.LibGraalScope;
@@ -60,23 +58,21 @@ import org.graalvm.word.WordFactory;
 
 import com.oracle.svm.core.c.CGlobalData;
 import com.oracle.svm.core.c.CGlobalDataFactory;
-import com.oracle.svm.core.c.function.CEntryPointOptions;
+import com.oracle.svm.core.heap.Heap;
 
+import jdk.internal.misc.Unsafe;
 import jdk.vm.ci.code.InstalledCode;
 import jdk.vm.ci.hotspot.HotSpotCompilationRequest;
 import jdk.vm.ci.hotspot.HotSpotInstalledCode;
 import jdk.vm.ci.hotspot.HotSpotJVMCIRuntime;
 import jdk.vm.ci.hotspot.HotSpotResolvedJavaMethod;
 import jdk.vm.ci.runtime.JVMCICompiler;
-import sun.misc.Unsafe;
 
 /**
  * Entry points in libgraal corresponding to native methods in {@link LibGraalScope} and
  * {@code CompileTheWorld}.
  */
 public final class LibGraalEntryPoints {
-
-    private static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
 
     /**
      * @see org.graalvm.compiler.hotspot.HotSpotTTYStreamProvider#execute
@@ -88,6 +84,8 @@ public final class LibGraalEntryPoints {
      * {@code org.graalvm.compiler.hotspot.management.libgraal.MBeanProxy#defineClassesInHotSpot}.
      */
     static final CGlobalData<Pointer> MANAGEMENT_BARRIER = CGlobalDataFactory.createWord((Pointer) WordFactory.zero());
+
+    static final CGlobalData<Pointer> GLOBAL_TIMESTAMP = CGlobalDataFactory.createBytes(() -> 8);
 
     @CEntryPoint(builtin = Builtin.GET_CURRENT_THREAD, name = "Java_org_graalvm_libgraal_LibGraalScope_getIsolateThreadIn")
     private static native IsolateThread getIsolateThreadIn(PointerBase env, PointerBase hsClazz, @IsolateContext Isolate isolate);
@@ -124,7 +122,7 @@ public final class LibGraalEntryPoints {
         CachedOptions options = cachedOptions.get();
         if (options == null || options.hash != hash) {
             byte[] buffer = new byte[size];
-            UNSAFE.copyMemory(null, address, buffer, Unsafe.ARRAY_BYTE_BASE_OFFSET, size);
+            Unsafe.getUnsafe().copyMemory(null, address, buffer, Unsafe.ARRAY_BYTE_BASE_OFFSET, size);
             int actualHash = Arrays.hashCode(buffer);
             if (actualHash != hash) {
                 throw new IllegalArgumentException(actualHash + " != " + hash);
@@ -176,7 +174,9 @@ public final class LibGraalEntryPoints {
      * {@code org.graalvm.compiler.hotspot.test.CompileTheWorld.compileMethodInLibgraal()}.
      *
      * @param methodHandle the method to be compiled. This is a handle to a
-     *            {@link HotSpotResolvedJavaMethod} in HotSpot's heap.
+     *            {@link HotSpotResolvedJavaMethod} in HotSpot's heap. A value of 0L can be passed
+     *            to use this method for the side effect of initializing a
+     *            {@link HotSpotGraalCompiler} instance without doing any compilation.
      * @param useProfilingInfo specifies if profiling info should be used during the compilation
      * @param installAsDefault specifies if the compiled code should be installed for the
      *            {@code Method*} associated with {@code methodHandle}
@@ -202,8 +202,7 @@ public final class LibGraalEntryPoints {
      * @return a handle to a {@link InstalledCode} in HotSpot's heap or 0 if compilation failed
      */
     @SuppressWarnings({"unused", "try"})
-    @CEntryPoint(name = "Java_org_graalvm_compiler_hotspot_test_CompileTheWorld_compileMethodInLibgraal")
-    @CEntryPointOptions(include = LibGraalFeature.IsEnabled.class)
+    @CEntryPoint(name = "Java_org_graalvm_compiler_hotspot_test_CompileTheWorld_compileMethodInLibgraal", include = LibGraalFeature.IsEnabled.class)
     private static long compileMethod(PointerBase jniEnv,
                     PointerBase jclass,
                     @CEntryPoint.IsolateThreadContext long isolateThread,
@@ -218,11 +217,14 @@ public final class LibGraalEntryPoints {
                     int stackTraceCapacity) {
         try {
             HotSpotJVMCIRuntime runtime = runtime();
+            HotSpotGraalCompiler compiler = (HotSpotGraalCompiler) runtime.getCompiler();
+            if (methodHandle == 0L) {
+                return 0L;
+            }
             HotSpotResolvedJavaMethod method = LibGraal.unhand(HotSpotResolvedJavaMethod.class, methodHandle);
 
             int entryBCI = JVMCICompiler.INVOCATION_ENTRY_BCI;
             HotSpotCompilationRequest request = new HotSpotCompilationRequest(method, entryBCI, 0L);
-            HotSpotGraalCompiler compiler = (HotSpotGraalCompiler) runtime.getCompiler();
             try (CompilationContext scope = HotSpotGraalServices.openLocalCompilationContext(request)) {
 
                 OptionValues options = decodeOptions(optionsAddress, optionsSize, optionsHash);
@@ -242,9 +244,15 @@ public final class LibGraalEntryPoints {
             t.printStackTrace(new PrintStream(baos));
             byte[] stackTrace = baos.toByteArray();
             int length = Math.min(stackTraceCapacity - Integer.BYTES, stackTrace.length);
-            UNSAFE.putInt(stackTraceAddress, length);
-            UNSAFE.copyMemory(stackTrace, ARRAY_BYTE_BASE_OFFSET, null, stackTraceAddress + Integer.BYTES, length);
+            Unsafe.getUnsafe().putInt(stackTraceAddress, length);
+            Unsafe.getUnsafe().copyMemory(stackTrace, Unsafe.ARRAY_BYTE_BASE_OFFSET, null, stackTraceAddress + Integer.BYTES, length);
             return 0L;
+        } finally {
+            /*
+             * libgraal doesn't use a dedicated reference handler thread, so we trigger the
+             * reference handling manually when a compilation finishes.
+             */
+            Heap.getHeap().doReferenceHandling();
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,12 +24,18 @@
  */
 package com.oracle.svm.core.c.function;
 
+import java.util.List;
+
 import org.graalvm.nativeimage.ImageSingletons;
 import org.graalvm.nativeimage.Isolate;
 import org.graalvm.nativeimage.IsolateThread;
 import org.graalvm.nativeimage.Isolates.CreateIsolateParameters;
 import org.graalvm.nativeimage.Isolates.IsolateException;
+import org.graalvm.nativeimage.Isolates.ProtectionDomain;
 import org.graalvm.nativeimage.StackValue;
+import org.graalvm.nativeimage.UnmanagedMemory;
+import org.graalvm.nativeimage.c.struct.SizeOf;
+import org.graalvm.nativeimage.c.type.CCharPointerPointer;
 import org.graalvm.nativeimage.c.type.CTypeConversion;
 import org.graalvm.nativeimage.hosted.Feature;
 import org.graalvm.nativeimage.impl.IsolateSupport;
@@ -39,10 +45,13 @@ import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.annotate.AutomaticFeature;
 import com.oracle.svm.core.c.function.CEntryPointNativeFunctions.IsolateThreadPointer;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
+import com.oracle.svm.core.os.MemoryProtectionProvider;
+import com.oracle.svm.core.os.MemoryProtectionProvider.UnsupportedDomainException;
 
 public final class IsolateSupportImpl implements IsolateSupport {
     private static final String ISOLATES_DISABLED_MESSAGE = "Spawning of multiple isolates is disabled, use " +
                     SubstrateOptionsParser.commandArgument(SubstrateOptions.SpawnIsolates, "+") + " option.";
+    private static final String PROTECTION_DOMAIN_UNSUPPORTED_MESSAGE = "Protection domains are unavailable";
 
     static void initialize() {
         ImageSingletons.add(IsolateSupport.class, new IsolateSupportImpl());
@@ -62,10 +71,50 @@ public final class IsolateSupportImpl implements IsolateSupport {
             params.setReservedSpaceSize(parameters.getReservedAddressSpaceSize());
             params.setAuxiliaryImagePath(auxImagePath.get());
             params.setAuxiliaryImageReservedSpaceSize(parameters.getAuxiliaryImageReservedSpaceSize());
-            params.setVersion(2);
+            params.setVersion(3);
 
+            if (MemoryProtectionProvider.isAvailable()) {
+
+                try {
+                    int pkey = MemoryProtectionProvider.singleton().asProtectionKey(parameters.getProtectionDomain());
+                    params.setProtectionKey(pkey);
+                } catch (UnsupportedDomainException e) {
+                    throw new IsolateException(e.getMessage());
+                }
+            } else if (!ProtectionDomain.NO_DOMAIN.equals(parameters.getProtectionDomain())) {
+                throw new IsolateException(PROTECTION_DOMAIN_UNSUPPORTED_MESSAGE);
+            }
+
+            // Prepare argc and argv.
+            List<String> args = parameters.getArguments();
+            int argc = args.size();
+            params.setArgc(argc);
+            params.setArgv(WordFactory.nullPointer());
+
+            CTypeConversion.CCharPointerHolder[] pointerHolders = null;
+            if (argc > 0) {
+                CCharPointerPointer argv = UnmanagedMemory.malloc(SizeOf.unsigned(CCharPointerPointer.class).multiply(argc));
+                pointerHolders = new CTypeConversion.CCharPointerHolder[argc];
+                for (int i = 0; i < argc; i++) {
+                    CTypeConversion.CCharPointerHolder ph = pointerHolders[i] = CTypeConversion.toCString(args.get(i));
+                    argv.write(i, ph.get());
+                }
+                params.setArgv(argv);
+            }
+
+            // Try to create the isolate.
             IsolateThreadPointer isolateThreadPtr = StackValue.get(IsolateThreadPointer.class);
-            throwOnError(CEntryPointNativeFunctions.createIsolate(params, WordFactory.nullPointer(), isolateThreadPtr));
+            int result = CEntryPointNativeFunctions.createIsolate(params, WordFactory.nullPointer(), isolateThreadPtr);
+
+            // Cleanup all native memory related to argv.
+            if (params.getArgv().isNonNull()) {
+                for (CTypeConversion.CCharPointerHolder ph : pointerHolders) {
+                    ph.close();
+                }
+                UnmanagedMemory.free(params.getArgv());
+            }
+
+            throwOnError(result);
             return isolateThreadPtr.read();
         }
     }

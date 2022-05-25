@@ -99,7 +99,7 @@ final class EnumSwitchPlugin implements NodePlugin {
              */
             AnalysisMethod aMethod = (AnalysisMethod) method;
             EnumSwitchFeature feature = ImageSingletons.lookup(EnumSwitchFeature.class);
-            aMethod.ensureGraphParsed(feature.bb, false);
+            aMethod.ensureGraphParsed(feature.bb);
             Boolean methodSafeForExecution = feature.methodsSafeForExecution.get(aMethod);
             assert methodSafeForExecution != null : "after-parsing hook not executed for method " + aMethod.format("%H.%n(%p)");
             if (!methodSafeForExecution.booleanValue()) {
@@ -110,14 +110,14 @@ final class EnumSwitchPlugin implements NodePlugin {
                 Method switchTableMethod = ReflectionUtil.lookupMethod(aMethod.getDeclaringClass().getJavaClass(), method.getName());
                 Object switchTable = switchTableMethod.invoke(null);
                 if (switchTable instanceof int[]) {
-                    ImageSingletons.lookup(ReflectionPlugins.ReflectionPluginRegistry.class).add(b.getCallingContext(), switchTable);
+                    ImageSingletons.lookup(ReflectionPlugins.ReflectionPluginRegistry.class).add(b.getMethod(), b.bci(), switchTable);
                 }
             } catch (ReflectiveOperationException ex) {
                 throw GraalError.shouldNotReachHere(ex);
             }
         }
 
-        Object switchTable = ImageSingletons.lookup(ReflectionPlugins.ReflectionPluginRegistry.class).get(b.getCallingContext());
+        Object switchTable = ImageSingletons.lookup(ReflectionPlugins.ReflectionPluginRegistry.class).get(b.getMethod(), b.bci());
         if (switchTable != null) {
             b.addPush(JavaKind.Object, ConstantNode.forConstant(snippetReflection.forObject(switchTable), 1, true, b.getMetaAccess()));
             return true;
@@ -141,11 +141,11 @@ final class EnumSwitchFeature implements GraalFeature {
         ImageSingletons.add(EnumSwitchPluginRegistry.class, new EnumSwitchPluginRegistry());
         DuringSetupAccessImpl access = (DuringSetupAccessImpl) a;
         bb = access.getBigBang();
-        access.getHostVM().addMethodAfterParsingHook(this::onMethodParsed);
+        access.getHostVM().addMethodAfterParsingListener(this::onMethodParsed);
     }
 
     private void onMethodParsed(AnalysisMethod method, StructuredGraph graph) {
-        boolean methodSafeForExecution = graph != null && graph.getNodes().filter(node -> node instanceof EnsureClassInitializedNode).isEmpty();
+        boolean methodSafeForExecution = graph.getNodes().filter(node -> node instanceof EnsureClassInitializedNode).isEmpty();
 
         Boolean existingValue = methodsSafeForExecution.put(method, methodSafeForExecution);
         assert existingValue == null : "Method parsed twice: " + method.format("%H.%n(%p)");

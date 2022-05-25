@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -52,7 +52,6 @@ import java.net.URL;
 import java.net.URLConnection;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileSystemNotFoundException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -152,7 +151,7 @@ public abstract class Source {
     private static final CharSequence CONTENT_UNSET = new String();
     private static final byte[] CONTENT_EMPTY = new byte[0];
 
-    private static final Source EMPTY = new SourceImpl.ImmutableKey(null, null, null, null, null, null, null, false, false, false, null).toSourceNotInterned();
+    private static final Source EMPTY = new SourceImpl.ImmutableKey(null, null, null, null, null, null, null, false, false, false, null, false).toSourceNotInterned();
     private static final String NO_FASTPATH_SUBSOURCE_CREATION_MESSAGE = "do not create sub sources from compiled code";
     private static final String URI_SCHEME = "truffle";
     private static final int MAX_BUFFER_SIZE = Integer.MAX_VALUE - 8;
@@ -978,7 +977,7 @@ public abstract class Source {
     private static final boolean ALLOW_IO = SourceAccessor.ACCESSOR.engineSupport().isIOAllowed();
 
     static Source buildSource(String language, Object origin, String name, String path, boolean canonicalizePath, String mimeType, Object content, URL url, URI uri, Charset encoding,
-                    boolean internal, boolean interactive, boolean cached, Object fileSystemContext) throws IOException {
+                    boolean internal, boolean interactive, boolean cached, Object fileSystemContext, boolean embedderSource) throws IOException {
         String useName = name;
         URI useUri = uri;
         Object useContent = content;
@@ -1049,7 +1048,7 @@ public abstract class Source {
                         useContent = ByteSequence.create(useTruffleFile.readAllBytes());
                     }
                 }
-            } catch (FileSystemNotFoundException fsnf) {
+            } catch (UnsupportedOperationException uoe) {
                 if (ALLOW_IO && SourceAccessor.hasAllAccess(useFileSystemContext)) {
                     // Not a recognized by FileSystem, fall back to URLConnection only for allowed
                     // IO without a custom FileSystem
@@ -1080,7 +1079,6 @@ public abstract class Source {
         }
 
         useContent = enforceInterfaceContracts(useContent);
-        SourceImpl.Key key = null;
         String relativePathInLanguageHome = null;
         if (useTruffleFile != null) {
             // The relativePathInLanguageHome has to be calculated also for Sources created in the
@@ -1090,18 +1088,18 @@ public abstract class Source {
             if (relativePathInLanguageHome != null) {
                 Object fsEngineObject = SourceAccessor.ACCESSOR.languageSupport().getFileSystemEngineObject(SourceAccessor.ACCESSOR.languageSupport().getFileSystemContext(useTruffleFile));
                 if (SourceAccessor.ACCESSOR.engineSupport().inContextPreInitialization(fsEngineObject)) {
-                    key = new SourceImpl.ReinitializableKey(useTruffleFile, useContent, useMimeType, language,
+                    SourceImpl.Key key = new SourceImpl.ReinitializableKey(useTruffleFile, useContent, useMimeType, language,
                                     useUrl, useUri, useName, usePath, internal, interactive, cached,
-                                    relativePathInLanguageHome);
+                                    relativePathInLanguageHome, embedderSource);
+                    Source source = SOURCES.intern(key);
+                    SourceAccessor.onSourceCreated(source);
+                    return source;
                 }
             }
         }
-        if (key == null) {
-            key = new SourceImpl.ImmutableKey(useContent, useMimeType, language, useUrl, useUri, useName, usePath, internal, interactive, cached, relativePathInLanguageHome);
-        }
-        Source source = SOURCES.intern(key);
-        SourceAccessor.onSourceCreated(source);
-        return source;
+        SourceImpl.Key key = new SourceImpl.ImmutableKey(useContent, useMimeType, language, useUrl, useUri, useName, usePath, internal, interactive, cached, relativePathInLanguageHome,
+                        embedderSource);
+        return SOURCES.intern(key);
     }
 
     static byte[] readBytes(URLConnection connection) throws IOException {
@@ -1244,7 +1242,7 @@ public abstract class Source {
             if (firstGuess != null) {
                 return firstGuess;
             }
-        } catch (URISyntaxException | IllegalArgumentException | FileSystemNotFoundException ex) {
+        } catch (URISyntaxException | IllegalArgumentException | UnsupportedOperationException ex) {
             // swallow and go on
         }
 
@@ -1341,6 +1339,7 @@ public abstract class Source {
         private boolean cached = true;
         private Charset fileEncoding;
         private Object fileSystemContext;
+        private boolean embedderSource;
 
         SourceBuilder(String language, Object origin) {
             Objects.requireNonNull(language);
@@ -1528,6 +1527,10 @@ public abstract class Source {
             return this;
         }
 
+        void embedderSource(boolean b) {
+            this.embedderSource = b;
+        }
+
         /**
          * Uses configuration of this builder to create new {@link Source} object. The method throws
          * an {@link IOException} if an error loading the source occurred.
@@ -1540,7 +1543,7 @@ public abstract class Source {
         public Source build() throws IOException {
             assert this.language != null;
             Source source = buildSource(this.language, this.origin, this.name, this.path, this.canonicalizePath, this.mimeType, this.content, this.url, this.uri, this.fileEncoding, this.internal,
-                            this.interactive, this.cached, fileSystemContext);
+                            this.interactive, this.cached, fileSystemContext, this.embedderSource);
 
             // make sure origin is not consumed again if builder is used twice
             if (source.hasBytes()) {
@@ -1556,7 +1559,6 @@ public abstract class Source {
 
             return source;
         }
-
     }
 
     private static Object getSourceContent(Source source) {
@@ -1724,7 +1726,7 @@ public abstract class Source {
      * Resets cached sources after native image generation.
      *
      * NOTE: this method is called reflectively by downstream projects
-     * {@code com.oracle.svm.truffle.TruffleFeature}.
+     * {@code com.oracle.svm.truffle.TruffleBaseFeature}.
      */
     @SuppressWarnings("unused")
     private static void resetNativeImageState() {

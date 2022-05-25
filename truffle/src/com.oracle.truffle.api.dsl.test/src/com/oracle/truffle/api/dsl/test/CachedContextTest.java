@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -54,11 +54,8 @@ import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.ContextPolicy;
 import com.oracle.truffle.api.TruffleLanguage.ContextReference;
 import com.oracle.truffle.api.TruffleLanguage.Env;
-import com.oracle.truffle.api.TruffleLanguage.LanguageReference;
 import com.oracle.truffle.api.TruffleLanguage.Registration;
 import com.oracle.truffle.api.dsl.Cached;
-import com.oracle.truffle.api.dsl.CachedContext;
-import com.oracle.truffle.api.dsl.CachedLanguage;
 import com.oracle.truffle.api.dsl.Fallback;
 import com.oracle.truffle.api.dsl.GenerateUncached;
 import com.oracle.truffle.api.dsl.Introspectable;
@@ -79,8 +76,12 @@ import com.oracle.truffle.api.library.Library;
 import com.oracle.truffle.api.nodes.Node;
 import com.oracle.truffle.api.test.polyglot.AbstractPolyglotTest;
 
-@SuppressWarnings("unused")
+@SuppressWarnings({"unused", "deprecation"})
 public class CachedContextTest extends AbstractPolyglotTest {
+
+    public CachedContextTest() {
+        needsLanguageEnv = true;
+    }
 
     @Test
     public void testContextLookup1() {
@@ -113,19 +114,19 @@ public class CachedContextTest extends AbstractPolyglotTest {
 
         @Specialization
         static String s0(int value,
-                        @CachedContext(CachedContextTestLanguage.class) Env context,
-                        @CachedContext(CachedContextTestLanguage.class) ContextReference<Env> contextSupplier) {
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) Env context,
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) ContextReference<Env> contextSupplier) {
             assertSame(CachedContextTestLanguage.getCurrentContext(), context);
-            assertSame(CachedContextTestLanguage.getCurrentContext(), contextSupplier.get());
+            assertSame(CachedContextTestLanguage.getCurrentContext(), contextSupplier.get(null));
             return "s0";
         }
 
         @Specialization
         static String s1(double value,
-                        @CachedContext(CachedContextTestLanguage.class) Env context,
-                        @CachedContext(CachedContextTestLanguage.class) ContextReference<Env> contextSupplier) {
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) Env context,
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) ContextReference<Env> contextSupplier) {
             assertSame(CachedContextTestLanguage.getCurrentContext(), context);
-            assertSame(CachedContextTestLanguage.getCurrentContext(), contextSupplier.get());
+            assertSame(CachedContextTestLanguage.getCurrentContext(), contextSupplier.get(null));
             return "s1";
         }
     }
@@ -163,7 +164,7 @@ public class CachedContextTest extends AbstractPolyglotTest {
         }
 
         @Specialization(guards = "g0(ctx)")
-        Object s0(@CachedContext(CachedContextTestLanguage.class) Env ctx) {
+        Object s0(@com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) Env ctx) {
             return ctx;
         }
     }
@@ -193,7 +194,7 @@ public class CachedContextTest extends AbstractPolyglotTest {
 
         @Specialization(guards = "arg == cachedArg", limit = "2")
         Object doNative(Object arg,
-                        @CachedContext(CachedContextTestLanguage.class) Env ctx,
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) Env ctx,
                         @Cached("initArg(arg, ctx)") Object cachedArg,
                         @CachedLibrary("cachedArg") InteropLibrary interop) {
             invocationCount++;
@@ -238,7 +239,7 @@ public class CachedContextTest extends AbstractPolyglotTest {
 
         @Specialization(guards = {"context == cachedContext", "isGuard(o)"}, limit = "1")
         String s0(String o,
-                        @CachedContext(CachedContextTestLanguage.class) Env context,
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) Env context,
                         @Cached("context") Env cachedContext) {
             return "s0";
         }
@@ -285,11 +286,16 @@ public class CachedContextTest extends AbstractPolyglotTest {
 
         public abstract String execute(Object o);
 
-        @Specialization(guards = {"ref.get() == cachedContext"}, limit = "2")
+        @Specialization(guards = {"getContext(o, ref) == cachedContext"}, limit = "2")
         String s0(String o,
-                        @CachedContext(CachedContextTestLanguage.class) ContextReference<Env> ref,
-                        @Cached("ref.get()") Env cachedContext) {
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) ContextReference<Env> ref,
+                        @Cached("getContext(o, ref)") Env cachedContext) {
             return "s0";
+        }
+
+        // avoid deprecation warning in generated code
+        static Env getContext(String s, ContextReference<Env> ref) {
+            return ref.get(null);
         }
 
     }
@@ -302,7 +308,7 @@ public class CachedContextTest extends AbstractPolyglotTest {
         @ExpectError("Limit expressions must not bind dynamic parameter values.")
         @Specialization(guards = {"ref.get() == cachedContext"}, limit = "computeLimit(ref.get())")
         String s0(String o,
-                        @CachedContext(CachedContextTestLanguage.class) ContextReference<Env> ref,
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) ContextReference<Env> ref,
                         @Cached("ref.get()") Env cachedContext) {
             return "s0";
         }
@@ -321,29 +327,11 @@ public class CachedContextTest extends AbstractPolyglotTest {
         @ExpectError("Assumption expressions must not bind dynamic parameter values.")
         @Specialization(assumptions = "computeLimit(ref.get())")
         String s0(String o,
-                        @CachedContext(CachedContextTestLanguage.class) ContextReference<Env> ref) {
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) ContextReference<Env> ref) {
             return "s0";
         }
 
         static Assumption computeLimit(Env o) {
-            return null;
-        }
-
-    }
-
-    @SuppressWarnings("static-method")
-    abstract static class DynamicBindingError3 extends Node {
-
-        public abstract String execute(Object o);
-
-        @ExpectError("Assumption expressions must not bind dynamic parameter values.")
-        @Specialization(assumptions = "computeLimit(ref.get())")
-        String s0(String o,
-                        @CachedLanguage LanguageReference<CachedContextTestLanguage> ref) {
-            return "s0";
-        }
-
-        static Assumption computeLimit(CachedContextTestLanguage o) {
             return null;
         }
 
@@ -400,7 +388,7 @@ public class CachedContextTest extends AbstractPolyglotTest {
         @Specialization
         static String s0(Object value,
                         @ExpectError("Invalid @CachedContext specification. The type 'InvalidLanguage1' is not a valid language type. Valid language types must be annotated with @Registration.")//
-                        @CachedContext(InvalidLanguage1.class) Env context) {
+                        @com.oracle.truffle.api.dsl.CachedContext(InvalidLanguage1.class) Env context) {
             throw new AssertionError();
         }
     }
@@ -412,7 +400,7 @@ public class CachedContextTest extends AbstractPolyglotTest {
         @Specialization
         static String s0(Object value,
                         @ExpectError("Invalid @CachedContext specification. The type 'TruffleLanguage' is not a valid language type. Valid language types must be annotated with @Registration.")//
-                        @CachedContext(TruffleLanguage.class) Env context) {
+                        @com.oracle.truffle.api.dsl.CachedContext(TruffleLanguage.class) Env context) {
             throw new AssertionError();
         }
     }
@@ -423,8 +411,8 @@ public class CachedContextTest extends AbstractPolyglotTest {
 
         @Specialization
         static String s0(Object value,
-                        @ExpectError("Invalid @CachedContext specification. The context type could not be inferred from super type 'TruffleLanguage<T>' in language 'InvalidLanguage2'.")//
-                        @CachedContext(InvalidLanguage2.class) Object language) {
+                        @ExpectError("Invalid @CachedContext specification. The context type could not be inferred from super type in language 'InvalidLanguage2'.")//
+                        @com.oracle.truffle.api.dsl.CachedContext(InvalidLanguage2.class) Object language) {
             throw new AssertionError();
         }
     }
@@ -436,7 +424,7 @@ public class CachedContextTest extends AbstractPolyglotTest {
         @Specialization
         static String s0(Object value,
                         @ExpectError("Invalid @CachedContext specification. The parameter type must match the context type 'Env' or 'ContextReference<Env>'.") //
-                        @CachedContext(CachedContextTestLanguage.class) Object context) {
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) Object context) {
             throw new AssertionError();
         }
     }
@@ -448,7 +436,7 @@ public class CachedContextTest extends AbstractPolyglotTest {
         @Specialization
         static String s0(Object value,
                         @ExpectError("Invalid @CachedContext specification. The parameter type must match the context type 'Env' or 'ContextReference<Env>'.")//
-                        @CachedContext(CachedContextTestLanguage.class) ContextReference<Object> context) {
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) ContextReference<Object> context) {
             throw new AssertionError();
         }
     }
@@ -460,7 +448,7 @@ public class CachedContextTest extends AbstractPolyglotTest {
         @Specialization
         static String s0(Object value,
                         @ExpectError("Invalid @CachedContext specification. The parameter type must match the context type 'Env' or 'ContextReference<Env>'.") //
-                        @CachedContext(CachedContextTestLanguage.class) ContextReference<?> context) {
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) ContextReference<?> context) {
             throw new AssertionError();
         }
     }
@@ -475,7 +463,7 @@ public class CachedContextTest extends AbstractPolyglotTest {
         @ExpectError("The limit expression has no effect. %")
         @Specialization(guards = "cachedEnv != null", limit = "3")
         static String s0(Object value,
-                        @CachedContext(CachedContextTestLanguage.class) Env env,
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) Env env,
                         @Cached("env") Env cachedEnv) {
             throw new AssertionError();
         }
@@ -494,12 +482,12 @@ public class CachedContextTest extends AbstractPolyglotTest {
     static class CachedContextLibraryReceiver {
 
         @ExportMessage
-        final Object m0(@CachedContext(CachedContextTestLanguage.class) Env env) {
+        final Object m0(@com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) Env env) {
             return "m0";
         }
 
         @ExportMessage
-        final Object m1(@CachedContext(CachedContextTestLanguage.class) Env env) {
+        final Object m1(@com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) Env env) {
             return "m1";
         }
     }
@@ -515,7 +503,7 @@ public class CachedContextTest extends AbstractPolyglotTest {
 
         @ExpectError("Method signature (Env) does not match to the expected signature: %")
         @Specialization
-        Object doSomething(@CachedContext(CachedContextTestLanguage.class) Env ctx) {
+        Object doSomething(@com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) Env ctx) {
             return null;
         }
     }
@@ -527,7 +515,7 @@ public class CachedContextTest extends AbstractPolyglotTest {
         @ExpectError("The limit expression has no effect.%")
         @Specialization(guards = {"cachedGuard"}, limit = "1")
         boolean s0(Object arg0,
-                        @CachedContext(CachedContextTestLanguage.class) Env env,
+                        @com.oracle.truffle.api.dsl.CachedContext(CachedContextTestLanguage.class) Env env,
                         @Cached("getBoolean(env)") boolean cachedGuard) {
             return false;
         }

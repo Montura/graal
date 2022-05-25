@@ -31,8 +31,10 @@ import java.lang.reflect.Proxy;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -40,29 +42,26 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
 
-import org.graalvm.compiler.serviceprovider.GraalUnsafeAccess;
-
 import com.oracle.graal.pointsto.constraints.UnsupportedFeatures;
 import com.oracle.graal.pointsto.infrastructure.OriginalClassProvider;
 import com.oracle.graal.pointsto.reports.ReportUtils;
+import com.oracle.graal.pointsto.util.GraalAccess;
 import com.oracle.svm.core.SubstrateOptions;
 import com.oracle.svm.core.option.SubstrateOptionsParser;
 import com.oracle.svm.core.util.UserError;
+import com.oracle.svm.core.util.VMError;
 import com.oracle.svm.hosted.ImageClassLoader;
-import com.oracle.svm.hosted.NativeImageOptions;
-import com.oracle.svm.hosted.c.GraalAccess;
+import com.oracle.svm.hosted.LinkAtBuildTimeSupport;
 
+import jdk.internal.misc.Unsafe;
 import jdk.vm.ci.meta.MetaAccessProvider;
 import jdk.vm.ci.meta.ResolvedJavaType;
-import sun.misc.Unsafe;
 
 /**
  * The core class for deciding whether a class should be initialized during image building or class
  * initialization should be delayed to runtime.
  */
 public class ConfigurableClassInitialization implements ClassInitializationSupport {
-
-    private static final Unsafe UNSAFE = GraalUnsafeAccess.getUnsafe();
 
     /**
      * Setup for class initialization: configured through features and command line input. It
@@ -78,12 +77,17 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
      */
     private final ConcurrentMap<Class<?>, InitKind> classInitKinds = new ConcurrentHashMap<>();
 
-    /*
+    /**
      * These two are intentionally static to keep the reference to objects and classes that were
      * initialized in the JDK.
      */
     private static final Map<Class<?>, StackTraceElement[]> initializedClasses = new ConcurrentHashMap<>();
-    private static final Map<Object, StackTraceElement[]> instantiatedObjects = new ConcurrentHashMap<>();
+    /**
+     * Instantiated objects must be traced using their identities as their hashCode may change
+     * during the execution. We also want two objects of the same class that have the same hash and
+     * are equal to be mapped as two distinct entries.
+     */
+    private static final Map<Object, StackTraceElement[]> instantiatedObjects = Collections.synchronizedMap(new IdentityHashMap<>());
 
     private boolean configurationSealed;
 
@@ -97,6 +101,8 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
     protected MetaAccessProvider metaAccess;
 
     private final EarlyClassInitializerAnalysis earlyClassInitializerAnalysis;
+    private Set<Class<?>> provenSafeEarly = Collections.synchronizedSet(new HashSet<>());
+    private Set<Class<?>> provenSafeLate = Collections.synchronizedSet(new HashSet<>());
 
     public ConfigurableClassInitialization(MetaAccessProvider metaAccess, ImageClassLoader loader) {
         this.metaAccess = metaAccess;
@@ -111,9 +117,10 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
             List<ClassOrPackageConfig> allConfigs = classInitializationConfiguration.allConfigs();
             allConfigs.sort(Comparator.comparing(ClassOrPackageConfig::getName));
             String path = Paths.get(Paths.get(SubstrateOptions.Path.getValue()).toString(), "reports").toAbsolutePath().toString();
-            ReportUtils.report("initializer configuration", path, "initializer_configuration", "txt", writer -> {
+            ReportUtils.report("class initialization configuration", path, "class_initialization_configuration", "csv", writer -> {
+                writer.println("Class or Package Name, Initialization Kind, Reasons");
                 for (ClassOrPackageConfig config : allConfigs) {
-                    writer.append(config.getName()).append(" -> ").append(config.getKind().toString()).append(" reasons: ")
+                    writer.append(config.getName()).append(", ").append(config.getKind().toString()).append(", ")
                                     .append(String.join(" and ", config.getReasons())).append(System.lineSeparator());
                 }
             });
@@ -173,43 +180,43 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
      */
     private InitKind ensureClassInitialized(Class<?> clazz, boolean allowErrors) {
         try {
-            UNSAFE.ensureClassInitialized(clazz);
+            Unsafe.getUnsafe().ensureClassInitialized(clazz);
             return InitKind.BUILD_TIME;
         } catch (NoClassDefFoundError ex) {
-            if (NativeImageOptions.AllowIncompleteClasspath.getValue()) {
-                if (!allowErrors) {
-                    System.out.println("Warning: class initialization of class " + clazz.getTypeName() + " failed with exception " +
-                                    ex.getClass().getTypeName() + (ex.getMessage() == null ? "" : ": " + ex.getMessage()) + ". This class will be initialized at run time because option " +
-                                    SubstrateOptionsParser.commandArgument(NativeImageOptions.AllowIncompleteClasspath, "+") + " is used for image building. " +
-                                    instructionsToInitializeAtRuntime(clazz));
-                }
+            if (allowErrors) {
+                return InitKind.RUN_TIME;
+            } else if (!LinkAtBuildTimeSupport.singleton().linkAtBuildTime(clazz)) {
+                System.out.println("Warning: class initialization of class " + clazz.getTypeName() + " failed with exception " +
+                                ex.getClass().getTypeName() + (ex.getMessage() == null ? "" : ": " + ex.getMessage()) + ". This class will be initialized at run time. " +
+                                instructionsToInitializeAtRuntime(clazz));
                 return InitKind.RUN_TIME;
             } else {
-                return reportInitializationError(allowErrors, clazz, ex);
-
+                return reportInitializationError("Class initialization of " + clazz.getTypeName() + " failed. " +
+                                LinkAtBuildTimeSupport.singleton().errorMessageFor(clazz) + " " +
+                                instructionsToInitializeAtRuntime(clazz), clazz, ex);
             }
         } catch (Throwable t) {
-            return reportInitializationError(allowErrors, clazz, t);
+            if (allowErrors) {
+                return InitKind.RUN_TIME;
+            } else {
+                return reportInitializationError("Class initialization of " + clazz.getTypeName() + " failed. " +
+                                instructionsToInitializeAtRuntime(clazz), clazz, t);
+            }
         }
     }
 
-    private InitKind reportInitializationError(boolean allowErrors, Class<?> clazz, Throwable t) {
-        if (allowErrors) {
+    private InitKind reportInitializationError(String msg, Class<?> clazz, Throwable t) {
+        if (unsupportedFeatures != null) {
+            /*
+             * Report an unsupported feature during static analysis, so that we can collect multiple
+             * error messages without aborting analysis immediately. Returning InitKind.RUN_TIME
+             * ensures that analysis can continue, even though eventually an error is reported (so
+             * no image will be created).
+             */
+            unsupportedFeatures.addMessage(clazz.getTypeName(), null, msg, null, t);
             return InitKind.RUN_TIME;
         } else {
-            String msg = String.format("Class initialization of %s failed. %s", clazz.getTypeName(), instructionsToInitializeAtRuntime(clazz));
-            if (unsupportedFeatures != null) {
-                /*
-                 * Report an unsupported feature during static analysis, so that we can collect
-                 * multiple error messages without aborting analysis immediately. Returning
-                 * InitKind.RUN_TIME ensures that analysis can continue, even though eventually an
-                 * error is reported (so no image will be created).
-                 */
-                unsupportedFeatures.addMessage(clazz.getTypeName(), null, msg, null, t);
-                return InitKind.RUN_TIME;
-            } else {
-                throw UserError.abort(t, "%s", msg);
-            }
+            throw UserError.abort(t, "%s", msg);
         }
     }
 
@@ -266,8 +273,8 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
         setSubclassesAsRunTime(clazz);
         checkEagerInitialization(clazz);
 
-        if (!UNSAFE.shouldBeInitialized(clazz)) {
-            throw UserError.abort("The class %1$s has already been initialized; it is too late to register %1$s for build-time initialization (%2$s). %3$s",
+        if (!Unsafe.getUnsafe().shouldBeInitialized(clazz)) {
+            throw UserError.abort("The class %1$s has already been initialized (%2$s); it is too late to register %1$s for build-time initialization. %3$s",
                             clazz.getTypeName(), reason,
                             classInitializationErrorMessage(clazz, "Try avoiding this conflict by avoiding to initialize the class that caused initialization of " + clazz.getTypeName() +
                                             " or by not marking " + clazz.getTypeName() + " for build-time initialization."));
@@ -305,21 +312,12 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
 
             StackTraceElement[] trace = initializedClasses.get(clazz);
             String culprit = null;
-            boolean containsLambdaMetaFactory = false;
             for (StackTraceElement stackTraceElement : trace) {
                 if (stackTraceElement.getMethodName().equals("<clinit>")) {
                     culprit = stackTraceElement.getClassName();
                 }
-                if (stackTraceElement.getClassName().equals("java.lang.invoke.LambdaMetafactory")) {
-                    containsLambdaMetaFactory = true;
-                }
             }
-            if (containsLambdaMetaFactory) {
-                return clazz.getTypeName() + " was initialized through a lambda (https://github.com/oracle/graal/issues/1218). Try marking " + clazz.getTypeName() +
-                                " for build-time initialization with " + SubstrateOptionsParser.commandArgument(
-                                                ClassInitializationOptions.ClassInitialization, clazz.getTypeName(), "initialize-at-build-time") +
-                                ".";
-            } else if (culprit != null) {
+            if (culprit != null) {
                 return culprit + " caused initialization of this class with the following trace: \n" + classInitializationTrace(clazz);
             } else {
                 return clazz.getTypeName() + " has been initialized through the following trace:\n" + classInitializationTrace(clazz);
@@ -360,6 +358,23 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
         }
     }
 
+    @Override
+    public String reasonForClass(Class<?> clazz) {
+        InitKind initKind = classInitKinds.get(clazz);
+        String reason = classInitializationConfiguration.lookupReason(clazz.getTypeName());
+        if (initKind == InitKind.BUILD_TIME && provenSafeEarly.contains(clazz)) {
+            return "class proven as side-effect free before analysis";
+        } else if (initKind == InitKind.BUILD_TIME && provenSafeLate.contains(clazz)) {
+            return "class proven as side-effect free after analysis";
+        } else if (initKind.isRunTime()) {
+            return "classes are initialized at run time by default";
+        } else if (reason != null) {
+            return reason;
+        } else {
+            throw VMError.shouldNotReachHere("Must be either proven or specified");
+        }
+    }
+
     private static String classInitializationTrace(Class<?> clazz) {
         return getTraceString(initializedClasses.get(clazz));
     }
@@ -386,7 +401,7 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
         checkEagerInitialization(clazz);
 
         try {
-            UNSAFE.ensureClassInitialized(clazz);
+            Unsafe.getUnsafe().ensureClassInitialized(clazz);
         } catch (Throwable ex) {
             throw UserError.abort(ex, "Class initialization failed for %s. The class is requested for re-running (reason: %s)", clazz.getTypeName(), reason);
         }
@@ -512,7 +527,7 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
          */
         Set<Class<?>> illegalyInitialized = new HashSet<>();
         for (Map.Entry<Class<?>, InitKind> entry : classInitKinds.entrySet()) {
-            if (entry.getValue().isRunTime() && !UNSAFE.shouldBeInitialized(entry.getKey())) {
+            if (entry.getValue().isRunTime() && !Unsafe.getUnsafe().shouldBeInitialized(entry.getKey())) {
                 illegalyInitialized.add(entry.getKey());
             }
         }
@@ -549,7 +564,7 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
 
     private static void checkEagerInitialization(Class<?> clazz) {
         if (clazz.isPrimitive() || clazz.isArray()) {
-            throw UserError.abort("Primitive types and array classes are initialized eagerly because initialization is side-effect free. " +
+            throw UserError.abort("Primitive types and array classes are initialized at build time because initialization is side-effect free. " +
                             "It is not possible (and also not useful) to register them for run time initialization. Culprit: %s", clazz.getTypeName());
         }
         if (clazz.isAnnotation()) {
@@ -570,21 +585,42 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
             return existing;
         }
 
-        /* Without doubt initialize all annotations. */
+        /* Initialize all annotations because we don't support parsing at run-time. */
         if (clazz.isAnnotation()) {
             forceInitializeHosted(clazz, "all annotations are initialized", false);
             return InitKind.BUILD_TIME;
         }
 
         /* Well, and enums that got initialized while annotations are parsed. */
-        if (clazz.isEnum() && !UNSAFE.shouldBeInitialized(clazz)) {
+        if (clazz.isEnum() && !Unsafe.getUnsafe().shouldBeInitialized(clazz)) {
             if (memoize) {
                 forceInitializeHosted(clazz, "enums referred in annotations must be initialized", false);
             }
             return InitKind.BUILD_TIME;
         }
 
-        InitKind clazzResult = computeInitKindForClass(clazz);
+        if (clazz.isPrimitive()) {
+            forceInitializeHosted(clazz, "primitive types are initialized at build time", false);
+            return InitKind.BUILD_TIME;
+        }
+
+        if (clazz.isArray()) {
+            forceInitializeHosted(clazz, "arrays are initialized at build time", false);
+            return InitKind.BUILD_TIME;
+        }
+
+        if (Proxy.isProxyClass(clazz) && isProxyFromAnnotation(clazz)) {
+            forceInitializeHosted(clazz, "proxy classes are initialized at build time", false);
+            return InitKind.BUILD_TIME;
+        }
+
+        if (clazz.getTypeName().contains("$$StringConcat")) {
+            forceInitializeHosted(clazz, "string concatenation classes are initialized at build time", false);
+            return InitKind.BUILD_TIME;
+        }
+
+        InitKind specifiedInitKind = specifiedInitKindFor(clazz);
+        InitKind clazzResult = specifiedInitKind != null ? specifiedInitKind : InitKind.RUN_TIME;
 
         InitKind superResult = InitKind.BUILD_TIME;
         if (clazz.getSuperclass() != null) {
@@ -604,6 +640,9 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
                  * class at run time (at which time the same exception is probably thrown again).
                  */
                 clazzResult = ensureClassInitialized(clazz, true);
+                if (clazzResult == InitKind.BUILD_TIME) {
+                    addProvenEarly(clazz);
+                }
             }
         }
 
@@ -661,23 +700,6 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
         return result;
     }
 
-    private InitKind computeInitKindForClass(Class<?> clazz) {
-        if (clazz.isPrimitive() || clazz.isArray()) {
-            return InitKind.BUILD_TIME;
-        } else if (clazz.isAnnotation()) {
-            return InitKind.BUILD_TIME;
-        } else if (Proxy.isProxyClass(clazz) && isProxyFromAnnotation(clazz)) {
-            return InitKind.BUILD_TIME;
-        } else if (clazz.getTypeName().contains("$$StringConcat")) {
-            return InitKind.BUILD_TIME;
-        } else if (specifiedInitKindFor(clazz) != null) {
-            return specifiedInitKindFor(clazz);
-        } else {
-            /* The default value. */
-            return InitKind.RUN_TIME;
-        }
-    }
-
     private static boolean isProxyFromAnnotation(Class<?> clazz) {
         for (Class<?> interfaces : clazz.getInterfaces()) {
             if (interfaces.isAnnotation()) {
@@ -685,5 +707,14 @@ public class ConfigurableClassInitialization implements ClassInitializationSuppo
             }
         }
         return false;
+    }
+
+    void addProvenEarly(Class<?> clazz) {
+        provenSafeEarly.add(clazz);
+    }
+
+    @Override
+    public void setProvenSafeLate(Set<Class<?>> classes) {
+        provenSafeLate = new HashSet<>(classes);
     }
 }

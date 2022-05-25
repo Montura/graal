@@ -29,10 +29,8 @@ import static org.graalvm.compiler.nodes.PiNode.piCastToSnippetReplaceeStamp;
 import java.util.Map;
 
 import org.graalvm.compiler.api.replacements.Snippet;
-import org.graalvm.compiler.api.replacements.SnippetReflectionProvider;
 import org.graalvm.compiler.core.common.NumUtil;
 import org.graalvm.compiler.core.common.spi.ForeignCallDescriptor;
-import org.graalvm.compiler.debug.DebugHandlersFactory;
 import org.graalvm.compiler.graph.Node;
 import org.graalvm.compiler.graph.Node.ConstantNodeParameter;
 import org.graalvm.compiler.graph.Node.NodeIntrinsic;
@@ -48,7 +46,6 @@ import org.graalvm.compiler.replacements.SnippetTemplate;
 import org.graalvm.compiler.replacements.SnippetTemplate.Arguments;
 import org.graalvm.compiler.replacements.SnippetTemplate.SnippetInfo;
 import org.graalvm.compiler.replacements.Snippets;
-import org.graalvm.compiler.serviceprovider.GraalUnsafeAccess;
 import org.graalvm.compiler.word.BarrieredAccess;
 import org.graalvm.word.LocationIdentity;
 import org.graalvm.word.WordFactory;
@@ -69,12 +66,14 @@ import com.oracle.svm.core.snippets.SnippetRuntime.SubstrateForeignCallDescripto
 import com.oracle.svm.core.snippets.SubstrateForeignCallTarget;
 import com.oracle.svm.core.util.NonmovableByteArrayReader;
 
+import jdk.internal.misc.Unsafe;
+
 public final class SubstrateObjectCloneSnippets extends SubstrateTemplates implements Snippets {
     private static final SubstrateForeignCallDescriptor CLONE = SnippetRuntime.findForeignCall(SubstrateObjectCloneSnippets.class, "doClone", true, LocationIdentity.any());
     private static final SubstrateForeignCallDescriptor[] FOREIGN_CALLS = new SubstrateForeignCallDescriptor[]{CLONE};
 
-    public static void registerForeignCalls(Providers providers, SubstrateForeignCallsProvider foreignCalls) {
-        foreignCalls.register(providers, FOREIGN_CALLS);
+    public static void registerForeignCalls(SubstrateForeignCallsProvider foreignCalls) {
+        foreignCalls.register(FOREIGN_CALLS);
     }
 
     @SubstrateForeignCallTarget(stubCallingConvention = false)
@@ -97,8 +96,7 @@ public final class SubstrateObjectCloneSnippets extends SubstrateTemplates imple
             }
             return newArray;
         } else {
-            sun.misc.Unsafe unsafe = GraalUnsafeAccess.getUnsafe();
-            Object result = unsafe.allocateInstance(DynamicHub.toClass(hub));
+            Object result = Unsafe.getUnsafe().allocateInstance(DynamicHub.toClass(hub));
             int firstFieldOffset = ConfigurationValues.getObjectLayout().getFirstFieldOffset();
             int curOffset = firstFieldOffset;
 
@@ -159,19 +157,17 @@ public final class SubstrateObjectCloneSnippets extends SubstrateTemplates imple
     }
 
     @SuppressWarnings("unused")
-    public static void registerLowerings(OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers, SnippetReflectionProvider snippetReflection,
-                    Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
-        new SubstrateObjectCloneSnippets(options, factories, providers, snippetReflection, lowerings);
+    public static void registerLowerings(OptionValues options, Providers providers, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
+        new SubstrateObjectCloneSnippets(options, providers, lowerings);
     }
 
-    private SubstrateObjectCloneSnippets(OptionValues options, Iterable<DebugHandlersFactory> factories, Providers providers, SnippetReflectionProvider snippetReflection,
-                    Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
-        super(options, factories, providers, snippetReflection);
+    private SubstrateObjectCloneSnippets(OptionValues options, Providers providers, Map<Class<? extends Node>, NodeLoweringProvider<?>> lowerings) {
+        super(options, providers);
 
         ObjectCloneLowering objectCloneLowering = new ObjectCloneLowering();
         lowerings.put(SubstrateObjectCloneNode.class, objectCloneLowering);
         ObjectCloneWithExceptionLowering objectCloneWithExceptionLowering = new ObjectCloneWithExceptionLowering();
-        lowerings.put(ObjectCloneWithExceptionNode.class, objectCloneWithExceptionLowering);
+        lowerings.put(SubstrateObjectCloneWithExceptionNode.class, objectCloneWithExceptionLowering);
     }
 
     final class ObjectCloneLowering implements NodeLoweringProvider<SubstrateObjectCloneNode> {
@@ -190,9 +186,9 @@ public final class SubstrateObjectCloneSnippets extends SubstrateTemplates imple
         }
     }
 
-    final class ObjectCloneWithExceptionLowering implements NodeLoweringProvider<ObjectCloneWithExceptionNode> {
+    final class ObjectCloneWithExceptionLowering implements NodeLoweringProvider<SubstrateObjectCloneWithExceptionNode> {
         @Override
-        public void lower(ObjectCloneWithExceptionNode node, LoweringTool tool) {
+        public void lower(SubstrateObjectCloneWithExceptionNode node, LoweringTool tool) {
             StructuredGraph graph = node.graph();
 
             ForeignCallWithExceptionNode call = graph.add(new ForeignCallWithExceptionNode(CLONE, node.getObject()));

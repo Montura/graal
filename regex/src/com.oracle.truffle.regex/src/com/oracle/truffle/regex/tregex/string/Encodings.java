@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -41,6 +41,7 @@
 package com.oracle.truffle.regex.tregex.string;
 
 import com.oracle.truffle.api.CompilerDirectives;
+import com.oracle.truffle.api.strings.TruffleString;
 import com.oracle.truffle.regex.charset.CharMatchers;
 import com.oracle.truffle.regex.charset.CodePointSet;
 import com.oracle.truffle.regex.charset.Constants;
@@ -62,8 +63,9 @@ public final class Encodings {
     public static final Encoding UTF_32 = new Encoding.UTF32();
     public static final Encoding UTF_16_RAW = new Encoding.UTF16Raw();
     public static final Encoding LATIN_1 = new Encoding.Latin1();
+    public static final Encoding ASCII = new Encoding.Ascii();
 
-    public static final String[] ALL_NAMES = {UTF_8.getName(), UTF_16.getName(), UTF_16_RAW.getName(), UTF_32.getName(), LATIN_1.getName(), "BYTES"};
+    public static final String[] ALL_NAMES = {UTF_8.getName(), UTF_16.getName(), UTF_16_RAW.getName(), UTF_32.getName(), ASCII.getName(), LATIN_1.getName(), "BYTES"};
 
     public static Encoding getEncoding(String name) {
         switch (name) {
@@ -76,7 +78,6 @@ public final class Encodings {
             case "UTF-16-RAW":
                 return UTF_16_RAW;
             case "BYTES":
-                return LATIN_1;
             case "LATIN-1":
                 return LATIN_1;
             default:
@@ -89,6 +90,12 @@ public final class Encodings {
 
         public abstract String getName();
 
+        public abstract TruffleString.Encoding getTStringEncoding();
+
+        public int getStride() {
+            return 0;
+        }
+
         public int getMinValue() {
             return 0;
         }
@@ -100,6 +107,8 @@ public final class Encodings {
         public abstract int getEncodedSize(int codepoint);
 
         public abstract boolean isFixedCodePointWidth(CodePointSet set);
+
+        public abstract boolean isUnicode();
 
         public abstract AbstractStringBuffer createStringBuffer(int capacity);
 
@@ -126,6 +135,16 @@ public final class Encodings {
             }
 
             @Override
+            public TruffleString.Encoding getTStringEncoding() {
+                return TruffleString.Encoding.UTF_32;
+            }
+
+            @Override
+            public int getStride() {
+                return 2;
+            }
+
+            @Override
             public int getMaxValue() {
                 return Character.MAX_CODE_POINT;
             }
@@ -142,6 +161,11 @@ public final class Encodings {
 
             @Override
             public boolean isFixedCodePointWidth(CodePointSet set) {
+                return true;
+            }
+
+            @Override
+            public boolean isUnicode() {
                 return true;
             }
 
@@ -183,6 +207,16 @@ public final class Encodings {
             }
 
             @Override
+            public TruffleString.Encoding getTStringEncoding() {
+                return TruffleString.Encoding.UTF_16;
+            }
+
+            @Override
+            public int getStride() {
+                return 1;
+            }
+
+            @Override
             public int getMaxValue() {
                 return Character.MAX_CODE_POINT;
             }
@@ -218,6 +252,11 @@ public final class Encodings {
                 int min = set.getMin();
                 int max = set.getMax();
                 return !(min < 0x10000 && max > 0x10000);
+            }
+
+            @Override
+            public boolean isUnicode() {
+                return true;
             }
 
             @Override
@@ -269,17 +308,19 @@ public final class Encodings {
 
             @Override
             public Matchers.Builder createMatchersBuilder() {
-                return new Matchers.Builder(3);
+                return new Matchers.Builder(4);
             }
 
             @Override
             public void createMatcher(Builder matchersBuilder, int i, CodePointSet cps, CompilationBuffer compilationBuffer) {
-                matchersBuilder.createSplitMatcher(i, cps, compilationBuffer, Constants.BYTE_RANGE, Constants.BMP_RANGE_WITHOUT_LATIN1, Constants.ASTRAL_SYMBOLS);
+                matchersBuilder.createSplitMatcher(i, cps, compilationBuffer, Constants.ASCII_RANGE, Constants.BYTE_RANGE, Constants.BMP_RANGE_WITHOUT_LATIN1,
+                                Constants.ASTRAL_SYMBOLS_AND_LONE_SURROGATES);
             }
 
             @Override
             public Matchers toMatchers(Builder matchersBuilder) {
-                return new Matchers.UTF16Matchers(matchersBuilder.materialize(0), matchersBuilder.materialize(1), matchersBuilder.materialize(2), matchersBuilder.getNoMatchSuccessor());
+                return new Matchers.UTF16Matchers(matchersBuilder.materialize(0), matchersBuilder.materialize(1), matchersBuilder.materialize(2), matchersBuilder.materialize(3),
+                                matchersBuilder.getNoMatchSuccessor());
             }
         }
 
@@ -293,6 +334,16 @@ public final class Encodings {
             @Override
             public String getName() {
                 return "UTF-16-RAW";
+            }
+
+            @Override
+            public TruffleString.Encoding getTStringEncoding() {
+                return TruffleString.Encoding.UTF_16;
+            }
+
+            @Override
+            public int getStride() {
+                return 1;
             }
 
             @Override
@@ -316,6 +367,11 @@ public final class Encodings {
             }
 
             @Override
+            public boolean isUnicode() {
+                return true;
+            }
+
+            @Override
             public StringBufferUTF16 createStringBuffer(int capacity) {
                 return new StringBufferUTF16(capacity);
             }
@@ -332,18 +388,18 @@ public final class Encodings {
 
             @Override
             public Matchers.Builder createMatchersBuilder() {
-                return new Matchers.Builder(2);
+                return new Matchers.Builder(3);
             }
 
             @Override
             public void createMatcher(Builder matchersBuilder, int i, CodePointSet cps, CompilationBuffer compilationBuffer) {
                 assert cps.getMax() <= getMaxValue();
-                matchersBuilder.createSplitMatcher(i, cps, compilationBuffer, Constants.BYTE_RANGE, Constants.BMP_RANGE_WITHOUT_LATIN1);
+                matchersBuilder.createSplitMatcher(i, cps, compilationBuffer, Constants.ASCII_RANGE, Constants.BYTE_RANGE, Constants.BMP_RANGE_WITHOUT_LATIN1);
             }
 
             @Override
             public Matchers toMatchers(Builder matchersBuilder) {
-                return new Matchers.UTF16RawMatchers(matchersBuilder.materialize(0), matchersBuilder.materialize(1), matchersBuilder.getNoMatchSuccessor());
+                return new Matchers.UTF16RawMatchers(matchersBuilder.materialize(0), matchersBuilder.materialize(1), matchersBuilder.materialize(2), matchersBuilder.getNoMatchSuccessor());
             }
         }
 
@@ -352,6 +408,11 @@ public final class Encodings {
             @Override
             public String getName() {
                 return "UTF-8";
+            }
+
+            @Override
+            public TruffleString.Encoding getTStringEncoding() {
+                return TruffleString.Encoding.UTF_8;
             }
 
             @Override
@@ -400,6 +461,11 @@ public final class Encodings {
             }
 
             @Override
+            public boolean isUnicode() {
+                return true;
+            }
+
+            @Override
             public StringBufferUTF8 createStringBuffer(int capacity) {
                 return new StringBufferUTF8(capacity);
             }
@@ -425,7 +491,8 @@ public final class Encodings {
 
             @Override
             public void createMatcher(Builder matchersBuilder, int i, CodePointSet cps, CompilationBuffer compilationBuffer) {
-                matchersBuilder.createSplitMatcher(i, cps, compilationBuffer, Constants.ASCII_RANGE, Constants.UTF8_TWO_BYTE_RANGE, Constants.UTF8_THREE_BYTE_RANGE, Constants.ASTRAL_SYMBOLS);
+                matchersBuilder.createSplitMatcher(i, cps, compilationBuffer, Constants.ASCII_RANGE, Constants.UTF8_TWO_BYTE_RANGE, Constants.UTF8_THREE_BYTE_RANGE,
+                                Constants.ASTRAL_SYMBOLS);
             }
 
             @Override
@@ -443,6 +510,11 @@ public final class Encodings {
             @Override
             public String getName() {
                 return "LATIN-1";
+            }
+
+            @Override
+            public TruffleString.Encoding getTStringEncoding() {
+                return TruffleString.Encoding.ISO_8859_1;
             }
 
             @Override
@@ -466,8 +538,76 @@ public final class Encodings {
             }
 
             @Override
+            public boolean isUnicode() {
+                return false;
+            }
+
+            @Override
             public StringBufferLATIN1 createStringBuffer(int capacity) {
                 return new StringBufferLATIN1(capacity);
+            }
+
+            @Override
+            public LoopOptimizationNode extractLoopOptNode(CodePointSet cps) {
+                return new LoopOptIndexOfAnyByteNode(cps.inverseToByteArray(this));
+            }
+
+            @Override
+            public int getNumberOfDecodingSteps() {
+                return 1;
+            }
+
+            @Override
+            public void createMatcher(Builder matchersBuilder, int i, CodePointSet cps, CompilationBuffer compilationBuffer) {
+                matchersBuilder.getBuffer(0).set(i, CharMatchers.createMatcher(cps, compilationBuffer));
+            }
+
+            @Override
+            public Matchers toMatchers(Builder matchersBuilder) {
+                return new Matchers.SimpleMatchers(matchersBuilder.materialize(0), matchersBuilder.getNoMatchSuccessor());
+            }
+        }
+
+        public static final class Ascii extends Encoding {
+
+            @Override
+            public String getName() {
+                return "ASCII";
+            }
+
+            @Override
+            public TruffleString.Encoding getTStringEncoding() {
+                return TruffleString.Encoding.US_ASCII;
+            }
+
+            @Override
+            public int getMaxValue() {
+                return 0x7f;
+            }
+
+            @Override
+            public CodePointSet getFullSet() {
+                return Constants.ASCII_RANGE;
+            }
+
+            @Override
+            public int getEncodedSize(int codepoint) {
+                return 1;
+            }
+
+            @Override
+            public boolean isFixedCodePointWidth(CodePointSet set) {
+                return true;
+            }
+
+            @Override
+            public boolean isUnicode() {
+                return false;
+            }
+
+            @Override
+            public AbstractStringBuffer createStringBuffer(int capacity) {
+                return new StringBufferASCII(capacity);
             }
 
             @Override

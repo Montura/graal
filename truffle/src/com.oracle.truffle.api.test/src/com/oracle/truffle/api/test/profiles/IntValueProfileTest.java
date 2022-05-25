@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2018, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -40,15 +40,13 @@
  */
 package com.oracle.truffle.api.test.profiles;
 
-import static com.oracle.truffle.api.test.ReflectionUtils.getStaticField;
 import static com.oracle.truffle.api.test.ReflectionUtils.invoke;
-import static com.oracle.truffle.api.test.ReflectionUtils.invokeStatic;
-import static com.oracle.truffle.api.test.ReflectionUtils.loadRelative;
 import static org.hamcrest.CoreMatchers.is;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThat;
 
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.junit.experimental.theories.DataPoint;
 import org.junit.experimental.theories.Theories;
@@ -56,6 +54,8 @@ import org.junit.experimental.theories.Theory;
 import org.junit.runner.RunWith;
 
 import com.oracle.truffle.api.profiles.IntValueProfile;
+import com.oracle.truffle.api.test.ReflectionUtils;
+import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 @RunWith(Theories.class)
 public class IntValueProfileTest {
@@ -65,11 +65,16 @@ public class IntValueProfileTest {
     @DataPoint public static final int VALUE2 = 14;
     @DataPoint public static final int VALUE3 = Integer.MAX_VALUE;
 
+    @BeforeClass
+    public static void runWithWeakEncapsulationOnly() {
+        TruffleTestAssumptions.assumeWeakEncapsulation();
+    }
+
     private IntValueProfile profile;
 
     @Before
     public void create() {
-        profile = (IntValueProfile) invokeStatic(loadRelative(this.getClass(), "IntValueProfile$Enabled"), "create");
+        profile = ReflectionUtils.newInstance(IntValueProfile.class);
     }
 
     private static boolean isGeneric(IntValueProfile profile) {
@@ -141,7 +146,7 @@ public class IntValueProfileTest {
 
     @Test
     public void testDisabled() {
-        IntValueProfile p = (IntValueProfile) getStaticField(loadRelative(IntValueProfileTest.class, "IntValueProfile$Disabled"), "INSTANCE");
+        IntValueProfile p = IntValueProfile.getUncached();
         assertThat(p.profile(VALUE0), is(VALUE0));
         assertThat(p.profile(VALUE1), is(VALUE1));
         assertThat(p.profile(VALUE2), is(VALUE2));

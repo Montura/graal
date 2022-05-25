@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -103,31 +103,31 @@ import static org.junit.Assert.fail;
 
 public class ValueAssert {
 
-    private static final TypeLiteral<List<Object>> OBJECT_LIST = new TypeLiteral<List<Object>>() {
+    private static final TypeLiteral<List<Object>> OBJECT_LIST = new TypeLiteral<>() {
     };
-    private static final TypeLiteral<Map<Object, Object>> OBJECT_OBJECT_MAP = new TypeLiteral<Map<Object, Object>>() {
+    private static final TypeLiteral<Map<Object, Object>> OBJECT_OBJECT_MAP = new TypeLiteral<>() {
     };
-    private static final TypeLiteral<Map<String, Object>> STRING_OBJECT_MAP = new TypeLiteral<Map<String, Object>>() {
+    private static final TypeLiteral<Map<String, Object>> STRING_OBJECT_MAP = new TypeLiteral<>() {
     };
-    private static final TypeLiteral<Map<Long, Object>> LONG_OBJECT_MAP = new TypeLiteral<Map<Long, Object>>() {
+    private static final TypeLiteral<Map<Long, Object>> LONG_OBJECT_MAP = new TypeLiteral<>() {
     };
-    private static final TypeLiteral<Map<Integer, Object>> INTEGER_OBJECT_MAP = new TypeLiteral<Map<Integer, Object>>() {
+    private static final TypeLiteral<Map<Integer, Object>> INTEGER_OBJECT_MAP = new TypeLiteral<>() {
     };
-    private static final TypeLiteral<Map<Short, Object>> SHORT_OBJECT_MAP = new TypeLiteral<Map<Short, Object>>() {
+    private static final TypeLiteral<Map<Short, Object>> SHORT_OBJECT_MAP = new TypeLiteral<>() {
     };
-    private static final TypeLiteral<Map<Byte, Object>> BYTE_OBJECT_MAP = new TypeLiteral<Map<Byte, Object>>() {
+    private static final TypeLiteral<Map<Byte, Object>> BYTE_OBJECT_MAP = new TypeLiteral<>() {
     };
-    private static final TypeLiteral<Map<Number, Object>> NUMBER_OBJECT_MAP = new TypeLiteral<Map<Number, Object>>() {
+    private static final TypeLiteral<Map<Number, Object>> NUMBER_OBJECT_MAP = new TypeLiteral<>() {
     };
-    private static final TypeLiteral<Map<Float, Object>> FLOAT_OBJECT_MAP = new TypeLiteral<Map<Float, Object>>() {
+    private static final TypeLiteral<Map<Float, Object>> FLOAT_OBJECT_MAP = new TypeLiteral<>() {
     };
-    private static final TypeLiteral<Map<Double, Object>> DOUBLE_OBJECT_MAP = new TypeLiteral<Map<Double, Object>>() {
+    private static final TypeLiteral<Map<Double, Object>> DOUBLE_OBJECT_MAP = new TypeLiteral<>() {
     };
-    private static final TypeLiteral<Function<Object, Object>> FUNCTION = new TypeLiteral<Function<Object, Object>>() {
+    private static final TypeLiteral<Function<Object, Object>> FUNCTION = new TypeLiteral<>() {
     };
-    private static final TypeLiteral<Iterable<Object>> OBJECT_ITERABLE = new TypeLiteral<Iterable<Object>>() {
+    private static final TypeLiteral<Iterable<Object>> OBJECT_ITERABLE = new TypeLiteral<>() {
     };
-    private static final TypeLiteral<Iterator<Object>> OBJECT_ITERATOR = new TypeLiteral<Iterator<Object>>() {
+    private static final TypeLiteral<Iterator<Object>> OBJECT_ITERATOR = new TypeLiteral<>() {
     };
 
     public static void assertValue(Value value) {
@@ -303,8 +303,7 @@ public class ValueAssert {
                     break;
                 case INSTANTIABLE:
                     assertFalse(value.canInstantiate());
-                    // TODO remove PolyglotException if GR-21743 and GR-21744 is fixed.
-                    // assertFails(() -> value.newInstance(), UnsupportedOperationException.class);
+                    assertFails(() -> value.newInstance(), UnsupportedOperationException.class);
                     if (value.isNull()) {
                         assertNull(value.as(Function.class));
                         assertNull(value.as(IsFunctionalInterfaceVarArgs.class));
@@ -326,12 +325,9 @@ public class ValueAssert {
                     break;
                 case ARRAY_ELEMENTS:
                     assertFalse(value.hasArrayElements());
-                    // temporary workaround for GR-21744
-                    // assertFails(() -> value.getArrayElement(0),
-                    // UnsupportedOperationException.class);
-                    // assertFails(() -> value.setArrayElement(0, null),
-                    // UnsupportedOperationException.class);
-                    // assertFails(() -> value.getArraySize(), UnsupportedOperationException.class);
+                    assertFails(() -> value.getArrayElement(0), UnsupportedOperationException.class);
+                    assertFails(() -> value.setArrayElement(0, null), UnsupportedOperationException.class);
+                    assertFails(() -> value.getArraySize(), UnsupportedOperationException.class);
                     if (!value.isNull()) {
                         if ((!value.isHostObject() || (!(value.asHostObject() instanceof List) && !(value.asHostObject() instanceof Object[])))) {
                             assertFails(() -> value.as(List.class), ClassCastException.class);
@@ -588,7 +584,9 @@ public class ValueAssert {
 
                     for (String key : value.getMemberKeys()) {
                         Value child = value.getMember(key);
-                        if (!isSameHostObject(value, child)) {
+                        if (child == null) {
+                            assertTrue("A non-readable member must at least be modifiable, removable, or invocable", value.hasMember(key));
+                        } else if (!isSameHostObject(value, child)) {
                             assertValueImpl(child, depth + 1, hasHostAccess, detectSupportedTypes(child));
                         }
                     }
@@ -972,15 +970,13 @@ public class ValueAssert {
         if (value.fitsInByte()) {
             value.asByte();
         } else {
-            // TODO expecting PolyglotException is a temporary workaround GR-21744
-            assertFails(() -> value.asByte(), ClassCastException.class, PolyglotException.class);
+            assertFails(() -> value.asByte(), ClassCastException.class);
         }
         if (value.fitsInShort()) {
             short shortValue = value.asShort();
             assertEquals((byte) shortValue == shortValue, value.fitsInByte());
         } else {
-            // TODO expecting PolyglotException is a temporary workaround GR-21744
-            assertFails(() -> value.asShort(), ClassCastException.class, PolyglotException.class);
+            assertFails(() -> value.asShort(), ClassCastException.class);
         }
 
         if (value.fitsInInt()) {
@@ -988,8 +984,7 @@ public class ValueAssert {
             assertEquals((byte) intValue == intValue, value.fitsInByte());
             assertEquals((short) intValue == intValue, value.fitsInShort());
         } else {
-            // TODO expecting PolyglotException is a temporary workaround GR-21744
-            assertFails(() -> value.asInt(), ClassCastException.class, PolyglotException.class);
+            assertFails(() -> value.asInt(), ClassCastException.class);
         }
 
         if (value.fitsInLong()) {
@@ -998,22 +993,19 @@ public class ValueAssert {
             assertEquals((short) longValue == longValue, value.fitsInShort());
             assertEquals((int) longValue == longValue, value.fitsInInt());
         } else {
-            // TODO expecting PolyglotException is a temporary workaround GR-21744
-            assertFails(() -> value.asLong(), ClassCastException.class, PolyglotException.class);
+            assertFails(() -> value.asLong(), ClassCastException.class);
         }
 
         if (value.fitsInFloat()) {
             value.asFloat();
         } else {
-            // TODO expecting PolyglotException is a temporary workaround GR-21744
-            assertFails(() -> value.asFloat(), ClassCastException.class, PolyglotException.class);
+            assertFails(() -> value.asFloat(), ClassCastException.class);
         }
 
         if (value.fitsInDouble()) {
             value.asDouble();
         } else {
-            // TODO expecting PolyglotException is a temporary workaround GR-21744
-            assertFails(() -> value.asDouble(), ClassCastException.class, PolyglotException.class);
+            assertFails(() -> value.asDouble(), ClassCastException.class);
         }
     }
 

@@ -40,17 +40,26 @@ import com.oracle.truffle.espresso.descriptors.Utf8ConstantTable;
 import com.oracle.truffle.espresso.impl.ContextAccess;
 import com.oracle.truffle.espresso.impl.Klass;
 import com.oracle.truffle.espresso.impl.Method;
+import com.oracle.truffle.espresso.runtime.EspressoContext;
 
 @GenerateWrapper
 @ExportLibrary(NodeLibrary.class)
-public abstract class EspressoInstrumentableNode extends Node implements InstrumentableNode, ContextAccess {
+public abstract class EspressoInstrumentableNode extends Node implements BciProvider, InstrumentableNode, ContextAccess {
 
     public abstract Object execute(VirtualFrame frame);
 
     public abstract Method getMethod();
 
-    public abstract int getCurrentBCI(Frame frame);
+    @Override
+    public final EspressoContext getContext() {
+        /*
+         * WARNING: this returns the **current**, thread-local, context; not a context associated
+         * with this node.
+         */
+        return EspressoContext.get(this);
+    }
 
+    @Override
     public final boolean isInstrumentable() {
         return true;
     }
@@ -72,7 +81,7 @@ public abstract class EspressoInstrumentableNode extends Node implements Instrum
     public final Object getScope(Frame frame, @SuppressWarnings("unused") boolean nodeEnter) {
         // construct the current scope with valid local variables information
         Method method = getMethod();
-        Local[] liveLocals = method.getLocalVariableTable().getLocalsAt(getCurrentBCI(frame));
+        Local[] liveLocals = method.getLocalVariableTable().getLocalsAt(getBci(frame));
         if (liveLocals.length == 0) {
             // class was compiled without a local variable table
             // include "this" in method arguments throughout the method

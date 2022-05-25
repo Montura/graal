@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -46,10 +46,10 @@ import org.graalvm.compiler.nodes.NamedLocationIdentity;
 import org.graalvm.compiler.nodes.NodeView;
 import org.graalvm.compiler.nodes.PhiNode;
 import org.graalvm.compiler.nodes.ProxyNode;
+import org.graalvm.compiler.nodes.StructuredGraph.StageFlag;
 import org.graalvm.compiler.nodes.ValueNode;
 import org.graalvm.compiler.nodes.ValuePhiNode;
 import org.graalvm.compiler.nodes.ValueProxyNode;
-import org.graalvm.compiler.nodes.StructuredGraph.StageFlag;
 import org.graalvm.compiler.nodes.calc.ConditionalNode;
 import org.graalvm.compiler.nodes.calc.IntegerEqualsNode;
 import org.graalvm.compiler.nodes.cfg.Block;
@@ -66,7 +66,6 @@ import org.graalvm.compiler.nodes.java.StoreIndexedNode;
 import org.graalvm.compiler.nodes.memory.MultiMemoryKill;
 import org.graalvm.compiler.nodes.memory.ReadNode;
 import org.graalvm.compiler.nodes.memory.SingleMemoryKill;
-import org.graalvm.compiler.nodes.memory.VolatileReadNode;
 import org.graalvm.compiler.nodes.memory.WriteNode;
 import org.graalvm.compiler.nodes.util.GraphUtil;
 import org.graalvm.compiler.options.OptionValues;
@@ -100,14 +99,14 @@ public class ReadEliminationClosure extends EffectsClosure<ReadEliminationBlockS
         boolean deleted = false;
         if (node instanceof AccessFieldNode) {
             AccessFieldNode access = (AccessFieldNode) node;
-            if (access.isVolatile()) {
+            if (access.ordersMemoryAccesses()) {
                 killReadCacheByIdentity(state, any());
             } else {
                 ValueNode object = GraphUtil.unproxify(access.object());
                 LoadCacheEntry identifier = new LoadCacheEntry(object, new FieldLocationIdentity(access.field()));
                 ValueNode cachedValue = state.getCacheEntry(identifier);
                 if (node instanceof LoadFieldNode) {
-                    if (cachedValue != null && access.stamp(NodeView.DEFAULT).isCompatible(cachedValue.stamp(NodeView.DEFAULT))) {
+                    if (cachedValue != null && areValuesReplaceable(access, cachedValue, considerGuards)) {
                         effects.replaceAtUsages(access, cachedValue, access);
                         addScalarAlias(access, cachedValue);
                         deleted = true;
@@ -129,7 +128,7 @@ public class ReadEliminationClosure extends EffectsClosure<ReadEliminationBlockS
             }
         } else if (node instanceof ReadNode) {
             ReadNode read = (ReadNode) node;
-            if (read instanceof VolatileReadNode) {
+            if (read.ordersMemoryAccesses()) {
                 killReadCacheByIdentity(state, any());
             } else {
                 if (read.getLocationIdentity().isSingle()) {
@@ -164,7 +163,7 @@ public class ReadEliminationClosure extends EffectsClosure<ReadEliminationBlockS
             }
         } else if (node instanceof UnsafeAccessNode) {
             final UnsafeAccessNode unsafeAccess = (UnsafeAccessNode) node;
-            if (unsafeAccess.isVolatile()) {
+            if (unsafeAccess.ordersMemoryAccesses()) {
                 killReadCacheByIdentity(state, any());
             } else {
                 /*
@@ -181,7 +180,7 @@ public class ReadEliminationClosure extends EffectsClosure<ReadEliminationBlockS
                                 // perform boolean coercion
                                 LogicNode cmp = IntegerEqualsNode.create(cachedValue, ConstantNode.forInt(0), NodeView.DEFAULT);
                                 ValueNode boolValue = ConditionalNode.create(cmp, ConstantNode.forBoolean(false), ConstantNode.forBoolean(true), NodeView.DEFAULT);
-                                effects.addFloatingNode(boolValue, "boolean coercion");
+                                effects.ensureFloatingAdded(boolValue);
                                 cachedValue = boolValue;
                             }
                             effects.replaceAtUsages(load, cachedValue, load);
@@ -224,7 +223,7 @@ public class ReadEliminationClosure extends EffectsClosure<ReadEliminationBlockS
         return deleted;
     }
 
-    private static boolean areValuesReplaceable(ValueNode originalValue, ValueNode replacementValue, boolean considerGuards) {
+    protected static boolean areValuesReplaceable(ValueNode originalValue, ValueNode replacementValue, boolean considerGuards) {
         return originalValue.stamp(NodeView.DEFAULT).isCompatible(replacementValue.stamp(NodeView.DEFAULT)) &&
                         (!considerGuards || (getGuard(originalValue) == null || getGuard(originalValue) == getGuard(replacementValue)));
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -259,7 +259,7 @@ public class InliningData {
     private InlineInfo getTypeCheckedInlineInfo(Invoke invoke, ResolvedJavaMethod targetMethod) {
         StructuredGraph graph = invoke.asNode().graph();
         InliningLog inliningLog = graph.getInliningLog();
-        JavaTypeProfile typeProfile = ((MethodCallTargetNode) invoke.callTarget()).getProfile();
+        JavaTypeProfile typeProfile = ((MethodCallTargetNode) invoke.callTarget()).getTypeProfile();
         if (typeProfile == null) {
             InliningUtil.traceNotInlinedMethod(invoke, inliningDepth(), targetMethod, "no type profile exists");
             inliningLog.addDecision(invoke, false, "InliningPhase", null, null, "no type profile exists");

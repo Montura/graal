@@ -42,22 +42,21 @@ package com.oracle.truffle.api.test.polyglot;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assume.assumeTrue;
 
 import org.graalvm.polyglot.Context;
+import org.junit.BeforeClass;
 import org.junit.Test;
 
 import com.oracle.truffle.api.CompilerDirectives;
 import com.oracle.truffle.api.ContextLocal;
 import com.oracle.truffle.api.ContextThreadLocal;
 import com.oracle.truffle.api.ThreadLocalAction;
-import com.oracle.truffle.api.Truffle;
 import com.oracle.truffle.api.TruffleLanguage;
 import com.oracle.truffle.api.TruffleLanguage.Env;
-import com.oracle.truffle.api.TruffleOptions;
 import com.oracle.truffle.api.TruffleSafepoint;
 import com.oracle.truffle.api.frame.VirtualFrame;
 import com.oracle.truffle.api.nodes.RootNode;
+import com.oracle.truffle.tck.tests.TruffleTestAssumptions;
 
 /**
  * Note this test class currently depends on being executed in its own SVM image as it uses the
@@ -66,26 +65,36 @@ import com.oracle.truffle.api.nodes.RootNode;
  *
  * This could potentially be improved using some white-box API that allows to explicitly store and
  * restore the preinitialized context.
+ *
+ * This test needs
+ * -Dpolyglot.image-build-time.PreinitializeContexts=ContextPreintializationNativeImageLanguage
+ * provided via com.oracle.truffle.api.test/src/META-INF/native-image/native-image.properties.
+ * Setting the property programmatically in a static initializer via
+ * System.setProperty("polyglot.image-build-time.PreinitializeContexts", LANGUAGE) is not reliable
+ * as its publishing depends on when the class is initialized. The property needs to be available
+ * before com.oracle.truffle.polyglot.PolyglotContextImpl#preInitialize() is invoked, i.e., before
+ * com.oracle.svm.truffle.TruffleBaseFeature#beforeAnalysis().
  */
 public class ContextPreInitializationNativeImageTest {
 
     static final String LANGUAGE = "ContextPreintializationNativeImageLanguage";
 
-    static {
-        System.setProperty("polyglot.image-build-time.PreinitializeContexts", LANGUAGE);
+    @BeforeClass
+    public static void runWithWeakEncapsulationOnly() {
+        TruffleTestAssumptions.assumeWeakEncapsulation();
     }
 
     @Test
     public void test() {
         // only supported in AOT
-        assumeTrue(TruffleOptions.AOT);
+        TruffleTestAssumptions.assumeAOT();
 
         try (Context context = Context.create(LANGUAGE)) {
             context.initialize(LANGUAGE);
 
             context.enter();
-            assertTrue(Language.getContext().patched);
-            assertTrue(String.valueOf(Language.getContext().threadLocalActions), Language.getContext().threadLocalActions > 0);
+            assertTrue(Language.CONTEXT_REF.get(null).patched);
+            assertTrue(String.valueOf(Language.CONTEXT_REF.get(null).threadLocalActions), Language.CONTEXT_REF.get(null).threadLocalActions > 0);
         }
 
     }
@@ -107,6 +116,8 @@ public class ContextPreInitializationNativeImageTest {
 
         final ContextThreadLocal<Integer> threadLocal = createContextThreadLocal((c, t) -> 42);
         final ContextLocal<Integer> contextLocal = createContextLocal((c) -> 42);
+        private static final ContextReference<TestContext> CONTEXT_REF = ContextReference.create(Language.class);
+        private static final LanguageReference<Language> LANGUAGE_REF = LanguageReference.create(Language.class);
 
         @Override
         protected TestContext createContext(Env env) {
@@ -125,7 +136,7 @@ public class ContextPreInitializationNativeImageTest {
                 }
             });
 
-            Truffle.getRuntime().createCallTarget(new RootNode(this) {
+            new RootNode(this) {
                 @Override
                 public Object execute(VirtualFrame frame) {
                     /*
@@ -147,10 +158,18 @@ public class ContextPreInitializationNativeImageTest {
                         CompilerDirectives.shouldNotReachHere("invalid context local");
                     }
 
+                    if (CONTEXT_REF.get(null) != context) {
+                        CompilerDirectives.shouldNotReachHere("invalid context reference");
+                    }
+
+                    if (LANGUAGE_REF.get(null) != Language.this) {
+                        CompilerDirectives.shouldNotReachHere("invalid language reference");
+                    }
+
                     return null;
                 }
 
-            }).call();
+            }.getCallTarget().call();
 
         }
 
@@ -158,11 +177,15 @@ public class ContextPreInitializationNativeImageTest {
         protected boolean patchContext(TestContext context, Env newEnv) {
             assertFalse(context.patched);
             context.patched = true;
-            return true;
-        }
 
-        static TestContext getContext() {
-            return getCurrentContext(Language.class);
+            if (CONTEXT_REF.get(null) != context) {
+                CompilerDirectives.shouldNotReachHere("invalid context reference");
+            }
+
+            if (LANGUAGE_REF.get(null) != this) {
+                CompilerDirectives.shouldNotReachHere("invalid language reference");
+            }
+            return true;
         }
 
     }

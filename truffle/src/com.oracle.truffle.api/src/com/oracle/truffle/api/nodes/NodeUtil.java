@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -52,7 +52,6 @@ import java.util.List;
 import java.util.Objects;
 
 import com.oracle.truffle.api.CompilerAsserts;
-import com.oracle.truffle.api.CompilerDirectives.TruffleBoundary;
 import com.oracle.truffle.api.TruffleOptions;
 import com.oracle.truffle.api.source.SourceSection;
 
@@ -154,39 +153,6 @@ public final class NodeUtil {
     /** @since 0.8 or earlier */
     public static boolean replaceChild(Node parent, Node oldChild, Node newChild) {
         return replaceChild(parent, oldChild, newChild, false);
-    }
-
-    /**
-     * @since 19.0
-     * @deprecated in 20.2 use EncapsulatingNode.{@link EncapsulatingNodeReference#getCurrent()
-     *             getCurrent()}.get() instead.
-     */
-    @Deprecated
-    @TruffleBoundary
-    public static Node getCurrentEncapsulatingNode() {
-        return EncapsulatingNodeReference.getCurrent().get();
-    }
-
-    /**
-     * @since 19.0
-     * @deprecated in 20.2 use EncapsulatingNode.{@link EncapsulatingNodeReference#getCurrent()
-     *             getCurrent()}.set(node) instead.
-     */
-    @Deprecated
-    @TruffleBoundary
-    public static Node pushEncapsulatingNode(Node node) {
-        return EncapsulatingNodeReference.getCurrent().set(node);
-    }
-
-    /**
-     * @since 19.0
-     * @deprecated in 20.2 use EncapsulatingNode.{@link EncapsulatingNodeReference#getCurrent()
-     *             getCurrent()}.set(prev) instead.
-     */
-    @Deprecated
-    @TruffleBoundary
-    public static void popEncapsulatingNode(Node prev) {
-        EncapsulatingNodeReference.getCurrent().set(prev);
     }
 
     /*
@@ -931,6 +897,63 @@ public final class NodeUtil {
             currentFrom = currentFrom.getSuperclass();
         }
         return true;
+    }
+
+    /**
+     * Fails with an assertion if the exact {@link Node#getClass() node type} is used as a parent.
+     * Returns <code>true</code> if the node is <code>null</code>.
+     *
+     * @since 21.2
+     */
+    public static boolean assertRecursion(Node node, int maxRecursion) {
+        if (node == null) {
+            // not adopted nothing we can do
+            return true;
+        }
+        Node parent = node.getParent();
+        int counter = 0;
+        while (parent != null) {
+            if (node.getClass() == parent.getClass() && counter++ == maxRecursion) {
+                // found recursion
+                throw new AssertionError(String.format("Invalid recursion detected. Path to recursion: %n%s", printRecursionPath(node, node.getClass())));
+            }
+            parent = parent.getParent();
+        }
+        return true;
+    }
+
+    @SuppressWarnings("deprecation")
+    private static String printRecursionPath(Node node, Class<?> recursiveType) {
+        StringBuilder path = new StringBuilder();
+        path.append("     ").append(node.getClass().getTypeName()).append(System.lineSeparator());
+        Node current = node;
+        Node parent = node.getParent();
+        do {
+            path.append("  <- ");
+            if (parent != null) {
+                NodeFieldAccessor accessor = null;
+                if (parent != null) {
+                    accessor = findChildField(parent, current);
+                }
+                path.append(parent.getClass().getTypeName());
+                if (accessor != null) {
+                    path.append(".");
+                    path.append(accessor.getName());
+                }
+                if (parent.getClass() == recursiveType) {
+                    path.append(" <-recursion-detected->");
+                }
+            }
+            current = parent;
+            if (current != null) {
+                parent = current.getParent();
+            }
+            if (parent != null) {
+                path.append(System.lineSeparator());
+            }
+        } while (parent != null);
+
+        return path.toString();
     }
 
     private static final class NodeCounter implements NodeVisitor {

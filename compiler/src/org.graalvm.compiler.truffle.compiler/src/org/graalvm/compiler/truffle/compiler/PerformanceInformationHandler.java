@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,20 @@
  */
 package org.graalvm.compiler.truffle.compiler;
 
-import jdk.vm.ci.meta.ResolvedJavaType;
+import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.PerformanceWarningsAreFatal;
+import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.TracePerformanceWarnings;
+import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.TraceStackTraceLimit;
+import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.TreatPerformanceWarningsAsErrors;
+
+import java.io.Closeable;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.Equivalence;
 import org.graalvm.collections.MapCursor;
@@ -40,19 +53,8 @@ import org.graalvm.compiler.truffle.common.TruffleCompilerRuntime;
 import org.graalvm.compiler.truffle.options.PolyglotCompilerOptions;
 import org.graalvm.options.OptionValues;
 
-import java.io.Closeable;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-
-import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.PerformanceWarningsAreFatal;
-import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.TracePerformanceWarnings;
-import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.TraceStackTraceLimit;
-import static org.graalvm.compiler.truffle.options.PolyglotCompilerOptions.TreatPerformanceWarningsAsErrors;
+import jdk.vm.ci.meta.ResolvedJavaMethod;
+import jdk.vm.ci.meta.ResolvedJavaType;
 
 public final class PerformanceInformationHandler implements Closeable {
 
@@ -161,16 +163,15 @@ public final class PerformanceInformationHandler implements Closeable {
         ArrayList<ValueNode> warnings = new ArrayList<>();
         if (isWarningEnabled(PolyglotCompilerOptions.PerformanceWarningKind.VIRTUAL_RUNTIME_CALL)) {
             for (MethodCallTargetNode call : graph.getNodes(MethodCallTargetNode.TYPE)) {
-                if (call.targetMethod().isNative()) {
+                ResolvedJavaMethod targetMethod = call.targetMethod();
+                if (targetMethod.isNative()) {
                     continue; // native methods cannot be inlined
                 }
+
                 TruffleCompilerRuntime runtime = TruffleCompilerRuntime.getRuntime();
-                if (runtime.getInlineKind(call.targetMethod(), true).allowsInlining()) {
+                if (runtime.isInlineable(targetMethod) && runtime.getInlineKind(targetMethod, true).allowsInlining()) {
                     logPerformanceWarning(PolyglotCompilerOptions.PerformanceWarningKind.VIRTUAL_RUNTIME_CALL, target, Arrays.asList(call),
-                                    String.format("Partial evaluation could not inline the virtual runtime call %s to %s (%s).",
-                                                    call.invokeKind(),
-                                                    call.targetMethod(),
-                                                    call),
+                                    String.format("Partial evaluation could not inline the virtual runtime call %s to %s (%s).", call.invokeKind(), targetMethod, call),
                                     null);
                     warnings.add(call);
                 }

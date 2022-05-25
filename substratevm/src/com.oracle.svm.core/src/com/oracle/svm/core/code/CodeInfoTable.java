@@ -147,7 +147,7 @@ public class CodeInfoTable {
         if (referenceMapIndex == ReferenceMapIndex.NO_REFERENCE_MAP) {
             throw reportNoReferenceMap(sp, ip, info);
         }
-        return CodeReferenceMapDecoder.walkOffsetsFromPointer(sp, referenceMapEncoding, referenceMapIndex, visitor);
+        return CodeReferenceMapDecoder.walkOffsetsFromPointer(sp, referenceMapEncoding, referenceMapIndex, visitor, null);
     }
 
     public static RuntimeException reportNoReferenceMap(Pointer sp, CodePointer ip, CodeInfo info) {
@@ -222,18 +222,14 @@ public class CodeInfoTable {
     private static void invalidateCodeAtSafepoint(CodeInfo info) {
         VMOperation.guaranteeInProgressAtSafepoint("Must be at a safepoint");
         RuntimeCodeCache codeCache = getRuntimeCodeCache();
-        long num = codeCache.logMethodOperation(info, RuntimeCodeCache.INFO_INVALIDATE);
         codeCache.invalidateMethod(info);
-        codeCache.logMethodOperationEnd(num);
     }
 
     @RestrictHeapAccess(access = Access.NO_ALLOCATION, reason = "Called by the GC")
     public static void invalidateNonStackCodeAtSafepoint(CodeInfo info) {
         VMOperation.guaranteeGCInProgress("Must only be called during a GC.");
         RuntimeCodeCache codeCache = getRuntimeCodeCache();
-        long num = codeCache.logMethodOperation(info, RuntimeCodeCache.INFO_INVALIDATE);
         codeCache.invalidateNonStackMethod(info);
-        codeCache.logMethodOperationEnd(num);
     }
 
     @Uninterruptible(reason = "Prevent the GC from freeing the CodeInfo.", callerMustBe = true)
@@ -279,7 +275,9 @@ class CodeInfoFeature implements Feature {
         ImageSingletons.add(CodeInfoDecoderCounters.class, new CodeInfoDecoderCounters());
         ImageSingletons.add(CodeInfoEncoder.Counters.class, new CodeInfoEncoder.Counters());
         ImageSingletons.add(ImageCodeInfo.class, new ImageCodeInfo());
+        ImageSingletons.add(RuntimeCodeInfoHistory.class, new RuntimeCodeInfoHistory());
         ImageSingletons.add(RuntimeCodeCache.class, new RuntimeCodeCache());
+        ImageSingletons.add(RuntimeCodeInfoMemory.class, new RuntimeCodeInfoMemory());
     }
 
     @Override
@@ -293,6 +291,5 @@ class CodeInfoFeature implements Feature {
         config.registerAsImmutable(imageInfo.frameInfoObjectConstants);
         config.registerAsImmutable(imageInfo.frameInfoSourceClasses);
         config.registerAsImmutable(imageInfo.frameInfoSourceMethodNames);
-        config.registerAsImmutable(imageInfo.frameInfoNames);
     }
 }

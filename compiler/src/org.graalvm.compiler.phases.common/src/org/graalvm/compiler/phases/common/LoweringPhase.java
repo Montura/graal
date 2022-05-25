@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -111,11 +111,6 @@ public class LoweringPhase extends BasePhase<CoreProviders> {
             updateUsagesInterface(this.guard, guard);
             this.guard = guard;
         }
-
-        @Override
-        public ValueNode asNode() {
-            return this;
-        }
     }
 
     @Override
@@ -190,11 +185,12 @@ public class LoweringPhase extends BasePhase<CoreProviders> {
 
         @Override
         public FixedWithNextNode lastFixedNode() {
+            GraalError.guarantee(lastFixedNode.isAlive(), "The last fixed node %s was deleted by a previous lowering", lastFixedNode);
             return lastFixedNode;
         }
 
         private void setLastFixedNode(FixedWithNextNode n) {
-            assert n.isAlive() : n;
+            GraalError.guarantee(n.isAlive(), "Cannot add last fixed node %s because it is not alive", n);
             lastFixedNode = n;
         }
     }
@@ -236,8 +232,20 @@ public class LoweringPhase extends BasePhase<CoreProviders> {
     protected void run(final StructuredGraph graph, CoreProviders context) {
         lower(graph, context, LoweringMode.LOWERING);
         assert checkPostLowering(graph, context);
-        if (loweringStage == LoweringTool.StandardLoweringStage.HIGH_TIER) {
-            graph.setAfterStage(StageFlag.HIGH_TIER);
+        if (loweringStage instanceof LoweringTool.StandardLoweringStage) {
+            switch ((LoweringTool.StandardLoweringStage) loweringStage) {
+                case HIGH_TIER:
+                    graph.setAfterStage(StageFlag.HIGH_TIER_LOWERING);
+                    break;
+                case MID_TIER:
+                    graph.setAfterStage(StageFlag.MID_TIER_LOWERING);
+                    break;
+                case LOW_TIER:
+                    graph.setAfterStage(StageFlag.LOW_TIER_LOWERING);
+                    break;
+                default:
+                    GraalError.shouldNotReachHere("unexpected lowering stage");
+            }
         }
     }
 
@@ -330,7 +338,6 @@ public class LoweringPhase extends BasePhase<CoreProviders> {
 
         private final CoreProviders context;
         private final LoweringMode mode;
-        private ScheduleResult schedule;
         private final SchedulePhase schedulePhase;
 
         private Round(CoreProviders context, LoweringMode mode, OptionValues options) {
@@ -370,32 +377,34 @@ public class LoweringPhase extends BasePhase<CoreProviders> {
 
         @Override
         public void run(StructuredGraph graph) {
-            schedulePhase.apply(graph, false);
-            schedule = graph.getLastSchedule();
+            schedulePhase.apply(graph, context, false);
+            ScheduleResult schedule = graph.getLastSchedule();
             schedule.getCFG().computePostdominators();
             Block startBlock = schedule.getCFG().getStartBlock();
-            ProcessFrame rootFrame = new ProcessFrame(startBlock, graph.createNodeBitMap(), startBlock.getBeginNode(), null);
+            ProcessFrame rootFrame = new ProcessFrame(startBlock, graph.createNodeBitMap(), startBlock.getBeginNode(), null, schedule);
             LoweringPhase.processBlock(rootFrame);
         }
 
         private class ProcessFrame extends Frame<ProcessFrame> {
             private final NodeBitMap activeGuards;
             private AnchoringNode anchor;
+            private final ScheduleResult schedule;
 
-            ProcessFrame(Block block, NodeBitMap activeGuards, AnchoringNode anchor, ProcessFrame parent) {
+            ProcessFrame(Block block, NodeBitMap activeGuards, AnchoringNode anchor, ProcessFrame parent, ScheduleResult schedule) {
                 super(block, parent);
                 this.activeGuards = activeGuards;
                 this.anchor = anchor;
+                this.schedule = schedule;
             }
 
             @Override
             public void preprocess() {
-                this.anchor = Round.this.process(block, activeGuards, anchor);
+                this.anchor = Round.this.process(block, activeGuards, anchor, schedule);
             }
 
             @Override
             public ProcessFrame enter(Block b) {
-                return new ProcessFrame(b, activeGuards, b.getBeginNode(), this);
+                return new ProcessFrame(b, activeGuards, b.getBeginNode(), this, schedule);
             }
 
             @Override
@@ -406,7 +415,7 @@ public class LoweringPhase extends BasePhase<CoreProviders> {
                     // proxies.
                     newAnchor = b.getBeginNode();
                 }
-                return new ProcessFrame(b, activeGuards, newAnchor, this);
+                return new ProcessFrame(b, activeGuards, newAnchor, this, schedule);
             }
 
             @Override
@@ -419,13 +428,12 @@ public class LoweringPhase extends BasePhase<CoreProviders> {
                     }
                 }
             }
-
         }
 
         @SuppressWarnings("try")
-        private AnchoringNode process(final Block b, final NodeBitMap activeGuards, final AnchoringNode startAnchor) {
+        private AnchoringNode process(final Block b, final NodeBitMap activeGuards, final AnchoringNode startAnchor, ScheduleResult schedule) {
 
-            final LoweringToolImpl loweringTool = new LoweringToolImpl(context, startAnchor, activeGuards, b.getBeginNode(), this.schedule.getNodeToBlockMap());
+            final LoweringToolImpl loweringTool = new LoweringToolImpl(context, startAnchor, activeGuards, b.getBeginNode(), schedule.getNodeToBlockMap());
 
             // Lower the instructions of this block.
             List<Node> nodes = schedule.nodesFor(b);
@@ -447,7 +455,7 @@ public class LoweringPhase extends BasePhase<CoreProviders> {
 
                 if (node instanceof Lowerable) {
                     Collection<Node> unscheduledUsages = null;
-                    assert (unscheduledUsages = getUnscheduledUsages(node)) != null;
+                    assert (unscheduledUsages = getUnscheduledUsages(node, schedule)) != null;
                     Mark preLoweringMark = node.graph().getMark();
                     try (DebugCloseable s = node.graph().withNodeSourcePosition(node)) {
                         ((Lowerable) node).lower(loweringTool);
@@ -493,7 +501,7 @@ public class LoweringPhase extends BasePhase<CoreProviders> {
          *
          * @param node a {@link Lowerable} node
          */
-        private Collection<Node> getUnscheduledUsages(Node node) {
+        private Collection<Node> getUnscheduledUsages(Node node, ScheduleResult schedule) {
             List<Node> unscheduledUsages = new ArrayList<>();
             if (node instanceof FloatingNode) {
                 for (Node usage : node.usages()) {

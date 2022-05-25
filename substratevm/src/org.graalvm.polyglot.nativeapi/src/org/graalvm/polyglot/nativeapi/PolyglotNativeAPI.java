@@ -105,6 +105,8 @@ import com.oracle.svm.core.handles.ThreadLocalHandles;
 import com.oracle.svm.core.threadlocal.FastThreadLocalFactory;
 import com.oracle.svm.core.threadlocal.FastThreadLocalObject;
 
+// Checkstyle: stop method name check
+
 @SuppressWarnings("unused")
 @CHeader(value = PolyglotAPIHeader.class)
 public final class PolyglotNativeAPI {
@@ -119,7 +121,7 @@ public final class PolyglotNativeAPI {
 
     private static ThreadLocal<CallbackException> exceptionsTL = new ThreadLocal<>();
     private static ThreadLocal<ErrorStateHolder> errorHolder = new ThreadLocal<>();
-    @SuppressWarnings("rawtypes") private static final FastThreadLocalObject<ThreadLocalHandles> handles = FastThreadLocalFactory.createObject(ThreadLocalHandles.class);
+    @SuppressWarnings("rawtypes") private static final FastThreadLocalObject<ThreadLocalHandles> handles = FastThreadLocalFactory.createObject(ThreadLocalHandles.class, "PolyglotNativeAPI.handles");
 
     @SuppressWarnings("unchecked")
     private static ThreadLocalHandles<PolyglotNativeAPITypes.PolyglotHandle> getHandles() {
@@ -221,8 +223,24 @@ public final class PolyglotNativeAPI {
     }
 
     @CEntryPoint(name = "poly_engine_get_languages", documentation = {
-                    "Returns an array of size returned by {@link poly_engine_get_languages_size} where each element is a <code>poly_language<code> handle.",
+                    "Returns an array where each element is a <code>poly_language<code> handle.",
                     "",
+                    "To use, make two calls to this method:",
+                    "<p>",
+                    "   The first passing a size_t pointer to write the count of the languages to (IE: 'size_t poly_language_count')",
+                    "   The second passing the value of the written size_t length, and a pointer to a poly_language[poly_language_size]",
+                    "<code>",
+                    "size_t poly_language_count;",
+                    "",
+                    "// Get the number of languages",
+                    "poly_engine_get_languages(thread, engine, NULL, &poly_language_count);",
+                    "",
+                    "// Allocate properly sized array of poly_language[]",
+                    "poly_language languages_ptr[poly_language_count];",
+                    "",
+                    "// Write the language handles into the array",
+                    "poly_engine_get_languages(thread, engine, &languages_ptr, &num_languages);",
+                    "</code>",
                     " @param engine for which languages are returned.",
                     " @param language_array array to write <code>poly_language</code>s to or NULL.",
                     " @param size the number of languages in the engine.",

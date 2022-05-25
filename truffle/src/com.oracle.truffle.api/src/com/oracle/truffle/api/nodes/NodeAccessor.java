@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * The Universal Permissive License (UPL), Version 1.0
@@ -59,6 +59,7 @@ final class NodeAccessor extends Accessor {
     static final InteropSupport INTEROP = ACCESSOR.interopSupport();
     static final ExceptionSupport EXCEPTION = ACCESSOR.exceptionSupport();
     static final EngineSupport ENGINE = ACCESSOR.engineSupport();
+    static final HostSupport HOST = ACCESSOR.hostSupport();
     static final LanguageSupport LANGUAGE = ACCESSOR.languageSupport();
     static final RuntimeSupport RUNTIME = ACCESSOR.runtimeSupport();
     static final InstrumentSupport INSTRUMENT = ACCESSOR.instrumentSupport();
@@ -74,18 +75,13 @@ final class NodeAccessor extends Accessor {
         }
 
         @Override
-        public void setCallTarget(RootNode rootNode, RootCallTarget callTarget) {
-            rootNode.setCallTarget(callTarget);
-        }
-
-        @Override
         public boolean isCloneUninitializedSupported(RootNode rootNode) {
             return rootNode.isCloneUninitializedSupported();
         }
 
         @Override
-        public RootNode cloneUninitialized(RootNode rootNode) {
-            return rootNode.cloneUninitialized();
+        public RootNode cloneUninitialized(CallTarget sourceCallTarget, RootNode rootNode, RootNode uninitializedRootNode) {
+            return rootNode.cloneUninitializedImpl(sourceCallTarget, uninitializedRootNode);
         }
 
         @Override
@@ -104,13 +100,13 @@ final class NodeAccessor extends Accessor {
         }
 
         @Override
-        public Object getPolyglotEngine(RootNode rootNode) {
-            return rootNode.getEngine();
+        public void setSharingLayer(RootNode rootNode, Object layer) {
+            rootNode.setSharingLayer(layer);
         }
 
         @Override
-        public void setPolyglotEngine(RootNode rootNode, Object engine) {
-            rootNode.setEngine(engine);
+        public Object getSharingLayer(RootNode rootNode) {
+            return rootNode.getSharingLayer();
         }
 
         @Override
@@ -141,7 +137,7 @@ final class NodeAccessor extends Accessor {
         }
 
         @Override
-        public void applyPolyglotEngine(RootNode from, RootNode to) {
+        public void applySharingLayer(RootNode from, RootNode to) {
             to.applyEngineRef(from);
         }
 
@@ -163,6 +159,16 @@ final class NodeAccessor extends Accessor {
         @Override
         public ExecutionSignature prepareForAOT(RootNode rootNode) {
             return rootNode.prepareForAOT();
+        }
+
+        @Override
+        public boolean countsTowardsStackTraceLimit(RootNode rootNode) {
+            return rootNode.countsTowardsStackTraceLimit();
+        }
+
+        @Override
+        public CallTarget getCallTargetWithoutInitialization(RootNode root) {
+            return root.getCallTargetWithoutInitialization();
         }
 
     }

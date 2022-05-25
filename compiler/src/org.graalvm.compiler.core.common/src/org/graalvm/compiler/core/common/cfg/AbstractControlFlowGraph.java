@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2022, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -66,7 +66,8 @@ public interface AbstractControlFlowGraph<T extends AbstractBlockBase<T>> {
      * True if block {@code a} dominates block {@code b}.
      */
     static boolean dominates(AbstractBlockBase<?> a, AbstractBlockBase<?> b) {
-        assert a != null && b != null;
+        assert a != null;
+        assert b != null;
         return isDominatedBy(b, a);
     }
 
