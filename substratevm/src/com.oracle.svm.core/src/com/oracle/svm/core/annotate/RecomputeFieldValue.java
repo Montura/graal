@@ -109,8 +109,8 @@ public @interface RecomputeFieldValue {
          */
         Manual,
         /**
-         * Use a {@link CustomFieldValueComputer} or {@link CustomFieldValueTransformer}, which is
-         * specified as the target class.
+         * Use the {@link CustomFieldValueComputer} or {@link CustomFieldValueTransformer} specified
+         * by {@link RecomputeFieldValue#declClass} or {@link RecomputeFieldValue#declClassName}.
          */
         Custom,
     }

@@ -24,18 +24,32 @@
  */
 package com.oracle.svm.core.jdk;
 
+import static com.oracle.svm.core.util.VMError.guarantee;
+
 import java.io.Closeable;
 import java.lang.ref.ReferenceQueue;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+import org.graalvm.compiler.debug.GraalError;
+import org.graalvm.nativeimage.ImageSingletons;
+
 import com.oracle.svm.core.annotate.Alias;
 import com.oracle.svm.core.annotate.RecomputeFieldValue;
 import com.oracle.svm.core.annotate.RecomputeFieldValue.Kind;
+import com.oracle.svm.core.annotate.RecomputeFieldValue.ValueAvailability;
 import com.oracle.svm.core.annotate.Substitute;
 import com.oracle.svm.core.annotate.TargetClass;
+import com.oracle.svm.core.annotate.TargetElement;
 import com.oracle.svm.core.hub.DynamicHub;
+import com.oracle.svm.core.meta.SharedField;
+
+import jdk.vm.ci.meta.MetaAccessProvider;
+import jdk.vm.ci.meta.ResolvedJavaField;
 
 @TargetClass(java.io.FileDescriptor.class)
 final class Target_java_io_FileDescriptor {
@@ -53,15 +67,51 @@ final class Target_java_io_ObjectStreamClass {
     }
 }
 
+@TargetClass(className = "java.io.ClassCache", onlyWith = JavaIOClassCachePresent.class)
+final class Target_java_io_ClassCache {
+}
+
+/**
+ * Creates a new instance by calling the no-args constructor of the original value's class.
+ */
+class ConstructCopy implements RecomputeFieldValue.CustomFieldValueTransformer {
+
+    @Override
+    public ValueAvailability valueAvailability() {
+        return ValueAvailability.BeforeAnalysis;
+    }
+
+    @Override
+    public Object transform(MetaAccessProvider metaAccess, ResolvedJavaField original, ResolvedJavaField annotated, Object receiver, Object originalValue) {
+        try {
+            Constructor<? extends Object> cons = originalValue.getClass().getDeclaredConstructor();
+            cons.setAccessible(true);
+            return cons.newInstance();
+        } catch (Exception e) {
+            throw new GraalError(e);
+        }
+    }
+}
+
 @TargetClass(value = java.io.ObjectStreamClass.class, innerClass = "Caches")
 final class Target_java_io_ObjectStreamClass_Caches {
 
+    @TargetElement(onlyWith = JavaIOClassCachePresent.class, name = "localDescs") //
+    @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = ConstructCopy.class) static Target_java_io_ClassCache localDescs0;
+
+    @TargetElement(onlyWith = JavaIOClassCachePresent.class, name = "reflectors") //
+    @Alias @RecomputeFieldValue(kind = Kind.Custom, declClass = ConstructCopy.class) static Target_java_io_ClassCache reflectors0;
+
+    @TargetElement(onlyWith = JavaIOClassCacheAbsent.class) //
     @Alias @RecomputeFieldValue(kind = Kind.NewInstance, declClass = ConcurrentHashMap.class) static ConcurrentMap<?, ?> localDescs;
 
+    @TargetElement(onlyWith = JavaIOClassCacheAbsent.class) //
     @Alias @RecomputeFieldValue(kind = Kind.NewInstance, declClass = ConcurrentHashMap.class) static ConcurrentMap<?, ?> reflectors;
 
+    @TargetElement(onlyWith = JavaIOClassCacheAbsent.class) //
     @Alias @RecomputeFieldValue(kind = Kind.NewInstance, declClass = ReferenceQueue.class) private static ReferenceQueue<Class<?>> localDescsQueue;
 
+    @TargetElement(onlyWith = JavaIOClassCacheAbsent.class) //
     @Alias @RecomputeFieldValue(kind = Kind.NewInstance, declClass = ReferenceQueue.class) private static ReferenceQueue<Class<?>> reflectorsQueue;
 }
 
