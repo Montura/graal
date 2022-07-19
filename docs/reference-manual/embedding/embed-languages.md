@@ -14,12 +14,11 @@ permalink: /reference-manual/embed-languages/
 * [Lookup Java Types from Guest Languages](#lookup-java-types-from-guest-languages)
 * [Computed Arrays Using Polyglot Proxies](#computed-arrays-using-polyglot-proxies)
 * [Host Access](#host-access)
-* [Build Native Images from Polyglot Applications](#build-native-images-from-polyglot-applications)
+* [Build Native Executables from Polyglot Applications](#build-native-executables-from-polyglot-applications)
 * [Code Caching Across Multiple Contexts](#code-caching-across-multiple-contexts)
 * [Embed languages in Guest Languages](#embed-languages-in-guest-languages)
 * [Build a Shell for Many Languages](#build-a-shell-for-many-languages)
 * [Step Through with Execution Listeners](#step-through-with-execution-listeners)
-* [Enterprise Sandbox Resource Limits](#enterprise-sandbox-resource-limits)
 * [Dependency setup](#dependency-setup)
 
 The GraalVM Polyglot API lets you embed and run code from guest languages in JVM-based host applications.
@@ -373,12 +372,12 @@ The following access parameters may be configured:
 
 > Note: Granting access to class loading, native APIs, or host I/O effectively grants all access, as these privileges can be used to bypass other access restrictions.
 
-## Build Native Images from Polyglot Applications
+## Build Native Executables from Polyglot Applications
 
 Polyglot embeddings can also be compiled ahead-of-time using [Native Image](../native-image/README.md).
 By default, no language is included if the Polyglot API is used.
 To enable guest languages, the `--language:<languageId>` (e.g., `--language:js`) option needs to be specified.
-Currently, it is required to set the `--initialize-at-build-time` option when building a polyglot native image.
+Currently, it is required to set the `--initialize-at-build-time` option when building a polyglot native executable.
 All examples on this page can be converted to native executables with the `native-image` builder.
 
 The following example shows how a simple HelloWorld JavaScript application can be built using `native-image`:
@@ -389,7 +388,7 @@ native-image --language:js --initialize-at-build-time -cp . HelloPolyglot
 ./HelloPolyglot
 ```
 
-It should be mentioned that you can also include a guest language into the native image, but exclude the JIT compiler by passing the `-Dtruffle.TruffleRuntime=com.oracle.truffle.api.impl.DefaultTruffleRuntime` option to the builder.
+It should be mentioned that you can also include a guest language into the native executable, but exclude the JIT compiler by passing the `-Dtruffle.TruffleRuntime=com.oracle.truffle.api.impl.DefaultTruffleRuntime` option to the builder.
 Be aware, the flag `-Dtruffle.TruffleRuntime=com.oracle.truffle.api.impl.DefaultTruffleRuntime` has to placed *after* all the Truffle language/tool options, so that it will override the default settings.
 
 You can build the above example again but this time the created image will only contain the Truffle language interpreter (the Graal compiler will not be included in the image) by running:
@@ -400,7 +399,7 @@ native-image --language:js -Dtruffle.TruffleRuntime=com.oracle.truffle.api.impl.
 ### Configuring Native Host Reflection
 
 Accessing host Java code from the guest application requires Java reflection in order to work.
-When reflection is used within a native image, the [reflection configuration file](../native-image/Reflection.md) is required.
+When reflection is used within a native executable, the [reflection configuration file](../native-image/Reflection.md) is required.
 
 For this example we use JavaScript to show host access with native executables.
 Copy the following code in a new file named `AccessJavaFromJS.java`.
@@ -492,7 +491,7 @@ public class Main {
 }
 ```
 
-In this code: 
+In this code:
 - `import org.graalvm.polyglot.*` imports the base API for the Polyglot API.
 - `Engine.create()` creates a new engine instance with the default configuration.
 - `Source.create()` creates a source object for the expression “21 + 21”
@@ -532,7 +531,7 @@ public class Main {
 }
 ```
 
-In this code: 
+In this code:
 - `Context.newBuilder().allowAllAccess(true).build()` builds a new outer context with all privileges.
 - `outer.eval` evaluates a JavaScript snippet in the outer context.
 - `inner = Java.type('org.graalvm.polyglot.Context').create()` the first JS script line looks up the Java host type Context and creates a new inner context instance with no privileges (default).
@@ -610,12 +609,9 @@ In this code:
 - The `context.eval()` call evaluates a specified snippet of guest language code.
 - The `listener.close()` closes a listener earlier, however execution listeners are automatically closed with the engine.
 
-<!-- Enterprise Sandbox Resource Limits -->
-{% include_relative sandbox-options.md %}
-
 ## Polyglot Isolates
 
-On GraalVM Enterprise, a Polyglot engine can be configured to run in a dedicated native image isolate.
+On GraalVM Enterprise, a Polyglot engine can be configured to run in a dedicated `native-image` isolate.
 This experimental feature is enabled with the `--engine.SpawnIsolate` option.
 An engine running in this mode executes within a VM-level fault domain with its own garbage collector and JIT compiler.
 The fact that an engine runs within an isolate is completely transparent with respect to the Polyglot API and interoperability:
@@ -668,7 +664,7 @@ public class PolyglotIsolateMultipleContexts {
 
 Note how we need to specify the language for the isolated engine as a parameter to `--engine.SpawnIsolate` in this case.
 The reason is that an isolated engine needs to know which set of languages should be available.
-Behind the scenes, GraalVM will then locate the corresponding native image language library.
+Behind the scenes, GraalVM will then locate the corresponding Native Image language library.
 If only a single language is selected, then the library for the language will be loaded.
 If multiple languages are selected, then `libpolyglot`, the library containing all Truffle languages shipped with GraalVM, will be loaded.
 If a matching library is not available, creation of the engine will fail.
@@ -677,7 +673,7 @@ Only one language library can be loaded during GraalVM's lifetime.
 This means that the first isolated engine that is created sets the default for the remainder of the execution: if an isolated engine with solely Javascript was created first, only Javascript will be available in isolated languages.
 
 ### Passing Native Image Runtime Options
-Engines running in an isolate can make use of [native image runtime options](../native-image/HostedvsRuntimeOptions.md) by passing `--engine.IsolateOption.<option>` to the engine builder.
+Engines running in an isolate can make use of [Native Image runtime options](../native-image/HostedvsRuntimeOptions.md) by passing `--engine.IsolateOption.<option>` to the engine builder.
 For example, this can be used to limit the maximum heap memory used by an engine by setting the maximum heap size for the isolate via `--engine.IsolateOption.MaxHeapSize=128m`:
 
 ```java
